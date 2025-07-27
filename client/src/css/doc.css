@@ -1,0 +1,298 @@
+.header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  margin-top: -10px;
+}
+
+.error {
+  color: red;
+}
+
+input[type="file"] {
+  margin-bottom: 10px;
+}
+
+.uploading {
+  margin-top: 10px;
+}
+
+table {
+  width: 97%;
+  border-collapse: collapse;
+  margin-top: 20px;
+  table-layout: fixed;
+  /* Even spacing */
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.1);
+  margin-left: 25px;
+
+}
+
+th,
+td {
+  border-bottom: 1px solid #b8b8b8;
+  padding: 8px;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+th {
+  background-color: #f0f0f0;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Modal Overlay */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 999;
+}
+
+.modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  padding: 20px;
+  border: 1px solid #ccc;
+  z-index: 1000;
+}
+
+
+.button {
+  background-color: #000000;
+  color: #f0f0f0;
+  border: none;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.replace-button input[type="file"] {
+  display: none;
+}
+
+.button-delete {
+  background-color: #df1515;
+  color: #f0f0f0;
+  border: none;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.button-delete:hover {
+  background-color: #cc0000;
+}
+
+.chat-icon-button {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  z-index: 1001;
+  /* Ensure it's above other elements */
+}
+
+.chat-icon-button:focus {
+  outline: none;
+}
+
+.chat-icon-button img {
+  width: 50px;
+  height: 50px;
+}
+
+.close-button:focus {
+  outline: none;
+}
+
+.success {
+  color: #22bb33;
+  font-weight: bold;
+}
+
+#yes-delete {
+  background-color: #df1515;
+}
+
+.toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background-color: #fff;
+  border: 1px solid #ccc;
+  padding: 12px 16px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  animation: slideIn 0.3s ease-out, fadeOut 3s ease-in forwards;
+}
+
+.tst-success {
+  background-color: #b3fba8;
+  border-left: 2px solid #2ae140;
+  color: rgb(0, 135, 47);
+}
+
+.tst-error {
+  background-color: #fba8a8;
+  border-left: 2px solid #e12a2a;
+  color: rgb(135, 0, 0);
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  0% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    display: none;
+  }
+}
+
+
+.chat-icon-button {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  z-index: 1001; 
+  outline: none;
+}
+
+.chat-icon-button:focus {
+outline: none;
+}
+
+.chat-icon-button img {
+  width: 50px;
+  height: 50px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 999;
+}
+
+.modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  text-align: center;
+}
+
+.modal button {
+  margin: 10px;
+  padding: 10px 20px;
+  background-color: #000000;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.modal button:hover {
+  background-color: #262626;
+}
+
+.modal button:focus {
+outline: none;
+}
+
+.file-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start; /* Align to the left */
+}
+
+.upload-label {
+  cursor: pointer;
+}
+
+.upload-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #df1515;
+  color: #fff;
+  padding: 10px 20px;
+  margin-left: 25px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+}
+
+.upload-button:hover {
+  background-color: #cc0000;
+}
+
+.upload-icon {
+  font-size: 16px;
+  margin-right: 5px;
+}
+
+.upload-text {
+  font-size: 14px;
+  font-weight: bold; /* Make the text bold */
+}
+
+.uploading {
+  margin-top: 10px;
+  color: #ff0000;
+}
+
+.error {
+  margin-top: 10px;
+  color: #ff0000;
+}
+
+.success-message {
+  margin-top: 10px;
+  color: #00cc00;
+}
