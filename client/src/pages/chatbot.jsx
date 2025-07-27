@@ -1,103 +1,164 @@
 // src/pages/chatbot.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import '../css/chatbot.css';
 import '../css/App.css';
 import Navbar from '../components/Navbar';
 
 const ChatbotPage = () => {
-  const [chats, setChats] = useState(() => {
-    const storedChats = localStorage.getItem('chats');
-    return storedChats ? JSON.parse(storedChats) : ['Chat 1', 'Chat 2'];
-  });
-  const [activeChat, setActiveChat] = useState(chats[0]);
-  const [messages, setMessages] = useState(() => {
-    const storedMessages = localStorage.getItem(`messages_${activeChat}`);
-    return storedMessages ? JSON.parse(storedMessages) : [{ sender: 'bot', text: 'Hello! How can I assist you today?' }];
-  });
+  const [chats, setChats] = useState([]); // List of chat topics from backend
+  const [activeChat, setActiveChat] = useState(null); // Current chat topic
+  const [messages, setMessages] = useState([]); // Messages for current chat
   const [inputValue, setInputValue] = useState('');
-  const [editingChat, setEditingChat] = useState(null);
-  const [editChatName, setEditChatName] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef(null);
+
+  // Scroll to bottom of messages
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   useEffect(() => {
     document.title = 'Chatbot';
   }, []);
 
+  // Load all chats from backend on component mount
   useEffect(() => {
-    // Save chats to local storage
-    localStorage.setItem('chats', JSON.stringify(chats));
-  }, [chats]);
+    const loadChats = async () => {
+      try {
+        const response = await fetch('http://localhost:3001/chats');
+        if (response.ok) {
+          const chatData = await response.json();
+          setChats(chatData.map(chat => chat.topic));
+        }
+      } catch (error) {
+        console.error('Error loading chats:', error);
+      }
+    };
 
+    loadChats();
+  }, []);
+
+  // Load messages when active chat changes
   useEffect(() => {
-    // Save messages for the active chat to local storage
-    localStorage.setItem(`messages_${activeChat}`, JSON.stringify(messages));
-  }, [messages, activeChat]);
+    const loadMessages = async () => {
+      if (!activeChat) {
+        setMessages([]);
+        return;
+      }
 
-  const sendMessage = () => {
-    if (inputValue.trim()) {
-      const newMessages = [...messages, { sender: 'user', text: inputValue }];
+      try {
+        const response = await fetch(`http://localhost:3001/chat/${encodeURIComponent(activeChat)}`);
+        if (response.ok) {
+          const data = await response.json();
+          setMessages(data.messages);
+        } else if (response.status === 404) {
+          // Chat doesn't exist yet, initialize with empty messages
+          setMessages([]);
+        }
+      } catch (error) {
+        console.error('Error loading messages:', error);
+        setMessages([]);
+      }
+    };
+
+    loadMessages();
+  }, [activeChat]);
+
+  // Function to send message to backend
+  const sendToBackend = async (message, topic = null) => {
+    try {
+      const response = await fetch('http://localhost:3001/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message, topic }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('Error sending message to backend:', error);
+      throw error;
+    }
+  };
+
+  const sendMessage = async () => {
+    if (inputValue.trim() && !isLoading) {
+      const userMessage = { sender: 'user', text: inputValue };
+      const newMessages = [...messages, userMessage];
       setMessages(newMessages);
+      
+      const currentTopic = activeChat;
+      const isFirstMessage = messages.length === 0;
+      
       setInputValue('');
-      setTimeout(() => {
-        setMessages(prevMessages => [
-          ...prevMessages,
-          { sender: 'bot', text: 'This is a simulated response.' }
-        ]);
-      }, 1000);
+      setIsLoading(true);
+
+      try {
+        // Send message to backend
+        const responseData = await sendToBackend(inputValue, currentTopic);
+        
+        // Add bot response to chat
+        const botMessage = { sender: 'bot', text: responseData.response };
+        setMessages(prevMessages => [...prevMessages, botMessage]);
+        
+        // If this was the first message, set the chat topic and add to chat list
+        if (isFirstMessage) {
+          const newTopic = responseData.topic;
+          setActiveChat(newTopic);
+          if (!chats.includes(newTopic)) {
+            setChats(prevChats => [newTopic, ...prevChats]);
+          }
+        }
+      } catch (error) {
+        console.error('Error getting bot response:', error);
+        const errorMessage = { 
+          sender: 'bot', 
+          text: "Sorry, I encountered an error while processing your request. Please try again." 
+        };
+        setMessages(prevMessages => [...prevMessages, errorMessage]);
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
       sendMessage();
     }
   };
 
-  const addNewChat = () => {
-    const newChatId = `Chat_${Date.now()}`;
-    setChats([...chats, newChatId]);
-    setActiveChat(newChatId);
-    setMessages([{ sender: 'bot', text: 'Hello! How can I assist you today?' }]);
-  };
-
-  const handleChatClick = (chat) => {
-    setActiveChat(chat);
-    const storedMessages = localStorage.getItem(`messages_${chat}`);
-    setMessages(storedMessages ? JSON.parse(storedMessages) : [{ sender: 'bot', text: 'Hello! How can I assist you today?' }]);
-    setEditingChat(null); // Clear editing state when switching chats
-  };
-
-  const handleDeleteChat = (chatToDelete) => {
-    const updatedChats = chats.filter(chat => chat !== chatToDelete);
-    localStorage.removeItem(`messages_${chatToDelete}`);
-    setChats(updatedChats);
-    if (updatedChats.length > 0) {
-      setActiveChat(updatedChats[0]);
-      const storedMessages = localStorage.getItem(`messages_${updatedChats[0]}`);
-      setMessages(storedMessages ? JSON.parse(storedMessages) : [{ sender: 'bot', text: 'Hello! How can I assist you today?' }]);
-    } else {
-      setActiveChat(null);
-      setMessages([{ sender: 'bot', text: 'Hello! How can I assist you today?' }]);
+  const startNewChat = async () => {
+    // Clear current chat state
+    setActiveChat(null);
+    setMessages([]);
+    
+    // Refresh chat list from backend
+    try {
+      const response = await fetch('http://localhost:3001/chats');
+      if (response.ok) {
+        const chatData = await response.json();
+        setChats(chatData.map(chat => chat.topic));
+      }
+    } catch (error) {
+      console.error('Error refreshing chats:', error);
     }
   };
 
-  const startEditingChatName = (chat) => {
-    setEditingChat(chat);
-    setEditChatName(chat);
-  };
-
-  const saveEditChatName = (chat) => {
-    const updatedChats = chats.map(c => (c === chat ? editChatName : c));
-    setChats(updatedChats);
-    localStorage.setItem('chats', JSON.stringify(updatedChats));
-    setEditingChat(null);
-  };
-
-  const cancelEditChatName = () => {
-    setEditingChat(null);
-  };
-
-  const handleEditChatNameChange = (e) => {
-    setEditChatName(e.target.value);
+  const handleChatClick = (topic) => {
+    setActiveChat(topic);
   };
 
   return (
@@ -106,47 +167,20 @@ const ChatbotPage = () => {
       <div className="chatbot-main">
         <div className="chatbot-sidebar">
           <div className="sidebar-header">
-            <button className="new-chat-button" onClick={addNewChat}>New chat +</button>
+            <button className="new-chat-button" onClick={startNewChat}>
+              + New Chat
+            </button>
           </div>
           <div className="sidebar-chats">
-            {chats.map((chat, index) => (
+            {chats.map((topic, index) => (
               <div
                 key={index}
-                className={`chat-item ${activeChat === chat ? 'active' : ''}`}
-                onClick={() => {
-                  if (!editingChat) {
-                    handleChatClick(chat);
-                  }
-                }}
+                className={`chat-item ${activeChat === topic ? 'active' : ''}`}
+                onClick={() => handleChatClick(topic)}
               >
-                {editingChat === chat ? (
-                  <div className="chat-edit-container">
-                    <input
-                      type="text"
-                      value={editChatName}
-                      onChange={handleEditChatNameChange}
-                      autoFocus
-                    />
-                    <div className="chat-edit-buttons">
-                      <button className="small-button" onClick={() => saveEditChatName(chat)}>Save</button>
-                      <button className="small-button" onClick={cancelEditChatName}>Cancel</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="chat-item-content">
-                    <span>{chat}</span>
-                    <div className="chat-item-actions">
-                      <button className="small-button edit-chat-button" onClick={(e) => {
-                        e.stopPropagation(); // Prevent click event from propagating to parent div
-                        startEditingChatName(chat);
-                      }}>Edit</button>
-                      <button className="small-button delete-chat-button" onClick={(e) => {
-                        e.stopPropagation(); // Prevent click event from propagating to parent div
-                        handleDeleteChat(chat);
-                      }}>Delete</button>
-                    </div>
-                  </div>
-                )}
+                <div className="chat-item-content">
+                  <span>{topic}</span>
+                </div>
               </div>
             ))}
           </div>
@@ -154,7 +188,7 @@ const ChatbotPage = () => {
         <div className="chatbot-content">
           <div className="chatbot-header">
             <img className="chatbot-icon" src="/Chatbot-red.png" alt="Chatbot Icon" />
-            <h2>Chatbot</h2>
+            <h2>{activeChat || 'New Chat'}</h2>
           </div>
           <div className="chatbot-messages">
             {messages.map((msg, index) => (
@@ -162,16 +196,28 @@ const ChatbotPage = () => {
                 {msg.text}
               </div>
             ))}
+            {isLoading && (
+              <div className="message bot">
+                <div className="typing-indicator">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
           </div>
           <div className="chatbot-input">
-            <input
-              type="text"
+            <textarea
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              onKeyUp={handleKeyPress}
+              onKeyDown={handleKeyPress}
               placeholder="Type a message..."
+              disabled={isLoading}
             />
-            <button onClick={sendMessage}>Send</button>
+            <button onClick={sendMessage} disabled={isLoading || !inputValue.trim()}>
+              {isLoading ? 'Sending...' : 'Send'}
+            </button>
           </div>
         </div>
       </div>
