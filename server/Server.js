@@ -9,6 +9,7 @@ const fs = require('fs');
 const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
+const XLSX = require('xlsx'); // Added for Excel file support
 
 const app = express();
 const PORT = process.env.APP_PORT || 3001;
@@ -18,7 +19,7 @@ const bedrockClient = new BedrockRuntimeClient({
     region: process.env.AWS_REGION || 'ap-southeast-1',
     credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
     }
 });
 
@@ -120,12 +121,12 @@ const getDB = () => {
 };
 
 // Helper function to read file content
-// Add this helper function to read different file types
+// Enhanced function to read different file types with full content access
 const readFileContent = async (filePath, originalName) => {
     try {
         const extension = path.extname(originalName).toLowerCase();
 
-        // Handle PDF files
+        // Handle PDF files - Get full content, not truncated
         if (extension === '.pdf') {
             const dataBuffer = fs.readFileSync(filePath);
             const data = await pdfParse(dataBuffer);
@@ -147,6 +148,8 @@ const readFileContent = async (filePath, originalName) => {
         if (['.txt', '.md', '.csv'].includes(extension)) {
             return fs.readFileSync(filePath, 'utf8');
         }
+        
+        // Handle Excel files with full content extraction
         if (extension === '.xlsx' || extension === '.xls') {
             const workbook = XLSX.readFile(filePath);
             let excelText = '';
@@ -168,10 +171,57 @@ const readFileContent = async (filePath, originalName) => {
     }
 };
 
-// Helper function to call AWS Bedrock with retry logic
+// Helper function to analyze user message for specific file requests
+const analyzeUserMessageForFiles = (message, availableDocuments) => {
+    const requestedFiles = [];
+    const messageLower = message.toLowerCase();
+    
+    // Look for explicit file mentions
+    for (const doc of availableDocuments) {
+        const fileNameLower = doc.originalName.toLowerCase();
+        const fileNameWithoutExt = path.parse(doc.originalName).name.toLowerCase();
+        
+        // Check if user mentions the file by name (with or without extension)
+        if (messageLower.includes(fileNameLower) || 
+            messageLower.includes(fileNameWithoutExt) ||
+            messageLower.includes(doc.originalName.toLowerCase())) {
+            requestedFiles.push(doc);
+        }
+    }
+    
+    // Look for patterns like "file 1", "document 2", etc.
+    const fileNumberMatch = messageLower.match(/(?:file|document|doc)\s*(\d+)/g);
+    if (fileNumberMatch && availableDocuments.length > 0) {
+        fileNumberMatch.forEach(match => {
+            const numberMatch = match.match(/(\d+)/);
+            if (numberMatch) {
+                const fileIndex = parseInt(numberMatch[1]) - 1; // Convert to 0-based index
+                if (fileIndex >= 0 && fileIndex < availableDocuments.length) {
+                    if (!requestedFiles.find(f => f.id === availableDocuments[fileIndex].id)) {
+                        requestedFiles.push(availableDocuments[fileIndex]);
+                    }
+                }
+            }
+        });
+    }
+    
+    return requestedFiles;
+};
+
+// Helper function to check if message requests file information
+const isFileRelatedQuery = (message) => {
+    const fileKeywords = [
+        'document', 'file', 'pdf', 'upload', 'handbook', 'manual', 'report', 
+        'policy', 'procedure', 'guideline', 'attachment', 'doc', 'sheet'
+    ];
+    const messageLower = message.toLowerCase();
+    return fileKeywords.some(keyword => messageLower.includes(keyword));
+};
+
+// Helper function to call AWS Bedrock with retry logic 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const callBedrock = async (prompt, retryCount = 0) => {
+const callBedrock = async (prompt, retryCount = 0, maxTokens = 1000) => {
     try {
         const modelId = 'anthropic.claude-v2';
 
@@ -181,7 +231,7 @@ const callBedrock = async (prompt, retryCount = 0) => {
             accept: 'application/json',
             body: JSON.stringify({
                 anthropic_version: "bedrock-2023-05-31",
-                max_tokens: 1000,
+                max_tokens: maxTokens, // Now configurable to control response length
                 messages: [
                     {
                         role: "user",
@@ -205,10 +255,34 @@ const callBedrock = async (prompt, retryCount = 0) => {
             const delayMs = Math.pow(2, retryCount) * 1000; // 1s, 2s, 4s
             console.log(`Throttled! Retrying in ${delayMs}ms... (Attempt ${retryCount + 1})`);
             await delay(delayMs);
-            return callBedrock(prompt, retryCount + 1);
+            return callBedrock(prompt, retryCount + 1, maxTokens);
         }
 
         throw new Error('Failed to get response from AI model');
+    }
+};
+
+// Helper function to extract relevant text from a document based on user query
+const extractRelevantText = (content, query) => {
+    try {
+        const queryWords = query.toLowerCase().split(/\s+/);
+        const contentLines = content.split('\n');
+
+        // Find lines containing query words
+        const relevantLines = contentLines.filter(line => {
+            const lineLower = line.toLowerCase();
+            return queryWords.some(word => lineLower.includes(word));
+        });
+
+        // Combine relevant lines into a single string
+        const relevantText = relevantLines.join('\n');
+
+        // Limit the size of the relevant text to prevent excessive characters
+        const maxLength = 2000; // Adjust as needed
+        return relevantText.length > maxLength ? relevantText.substring(0, maxLength) + '... [truncated]' : relevantText;
+    } catch (error) {
+        console.error('Error extracting relevant text:', error);
+        return '[Error extracting relevant text]';
     }
 };
 
@@ -287,33 +361,99 @@ app.post('/chat', async (req, res) => {
             );
         });
 
-        // Get context from documents
+        // Get context from documents - Enhanced selective file loading
         let context = 'No documents available.';
+        let documentsToUse = [];
+        
         try {
-            // Get all documents
-            const documents = await new Promise((resolve, reject) => {
+            // Get all available documents
+            const allDocuments = await new Promise((resolve, reject) => {
                 db.all('SELECT * FROM documents', [], (err, rows) => {
                     if (err) reject(err);
                     else resolve(rows);
                 });
             });
 
-            if (documents.length > 0) {
-                context = 'Relevant documents:\n';
-                for (const doc of documents) {
-                    try {
-                        const filePath = path.join(__dirname, 'uploads', doc.filename);
-                        const content = await readFileContent(filePath, doc.originalName);
-                        context += `\nDocument: ${doc.originalName}\nContent: ${content.substring(0, 1000)}...\n`;
-                    } catch (err) {
-                        console.error(`Error reading file ${doc.filename}:`, err);
-                        context += `\nDocument: ${doc.originalName}\nContent: [Error reading file]\n`;
-                    }
+            if (allDocuments.length > 0) {
+                // Check if user specifically requested certain files
+                const requestedFiles = analyzeUserMessageForFiles(message, allDocuments);
+                
+                // If specific files are requested, use only those
+                if (requestedFiles.length > 0) {
+                    documentsToUse = requestedFiles;
+                    console.log(`User requested specific files: ${requestedFiles.map(f => f.originalName).join(', ')}`);
+                } 
+                // If the query is file-related but no specific files mentioned, use all
+                else if (isFileRelatedQuery(message)) {
+                    documentsToUse = allDocuments;
+                    console.log('File-related query detected, using all available documents');
+                }
+                // For general queries, don't load documents unless specifically requested
+                else {
+                    documentsToUse = [];
+                    console.log('General query detected, not loading documents unless specifically requested');
+                }
+
+                // Load content for selected documents
+                if (documentsToUse.length > 0) {
+                    context = 'Available documents:\n';
+                    
+                    // Process documents with performance optimization
+                    const documentPromises = documentsToUse.map(async (doc) => {
+                        try {
+                            const filePath = path.join(__dirname, 'uploads', doc.filename);
+                            
+                            // Check if file exists before trying to read
+                            if (!fs.existsSync(filePath)) {
+                                console.error(`File not found: ${filePath}`);
+                                return {
+                                    name: doc.originalName,
+                                    content: '[File not found on server]',
+                                    error: true
+                                };
+                            }
+                            
+                            const content = await readFileContent(filePath, doc.originalName);
+                            
+                            // Extract relevant text based on user query
+                            const relevantContent = extractRelevantText(content, message);
+                            
+                            return {
+                                name: doc.originalName,
+                                content: relevantContent,
+                                error: false
+                            };
+                        } catch (err) {
+                            console.error(`Error reading file ${doc.filename}:`, err);
+                            return {
+                                name: doc.originalName,
+                                content: `[Error reading file: ${err.message}]`,
+                                error: true
+                            };
+                        }
+                    });
+                    
+                    // Wait for all documents to be processed
+                    const documentResults = await Promise.all(documentPromises);
+                    
+                    // Build context string
+                    documentResults.forEach(result => {
+                        context += `\nDocument: ${result.name}\n`;
+                        if (result.error) {
+                            context += `Content: ${result.content}\n`;
+                        } else {
+                            context += `Content: ${result.content}\n`;
+                        }
+                        context += '---\n';
+                    });
+                    
+                    // Add document listing for user reference
+                    context += `\nDocuments used in this response: ${documentResults.map(r => r.name).join(', ')}\n`;
                 }
             }
         } catch (err) {
             console.error('Error reading documents:', err);
-            context = 'Error accessing documents.';
+            context = 'Error accessing documents. Please try again later.';
         }
 
         // Get chat history for context
@@ -341,43 +481,112 @@ app.post('/chat', async (req, res) => {
             console.error('Error fetching chat history:', err);
         }
 
-        // Generate response using Bedrock with full context
-        const prompt = `
-    You are a helpful AI assistant. Answer the user's question based on the provided context.
-    If the context doesn't contain relevant information, use your general knowledge but clearly state that you're doing so.
-    If the question is completely unrelated to the context and outside your knowledge, explicitly state that it's out of scope.
-    
-    Document Context:
-    ${context}
-    
-    Conversation History:
-    ${chatHistory}
-    
-    Current User Question: ${message}
-    
-    Assistant:`;
+        // Generate response using Bedrock with enhanced context and response control
+        let responseMaxTokens = 800; // Default shorter responses
+        
+        // Adjust response length based on query complexity
+        if (documentsToUse.length > 0 || message.length > 200) {
+            responseMaxTokens = 1200; // Longer responses for document-based or complex queries
+        }
+        
+        // Enhanced prompt with better instructions
+        const prompt = `You are a helpful AI assistant. Follow these guidelines:
 
-        const responseText = await callBedrock(prompt);
+RESPONSE LENGTH: Keep responses concise and to the point. Aim for 2-4 paragraphs maximum unless the user specifically asks for detailed information.
 
-        // Save bot response
+DOCUMENT USAGE: ${documentsToUse.length > 0 ? 
+    `The user has access to specific documents. Use ONLY the provided document content to answer questions about those documents. Documents available: ${documentsToUse.map(d => d.originalName).join(', ')}` : 
+    'Only use documents if the user specifically mentions them or asks about uploaded files.'
+}
+
+INSTRUCTIONS:
+1. Answer directly and concisely
+2. If using document information, cite the document name
+3. If information isn't in the provided context, clearly state this
+4. Don't repeat information unnecessarily
+5. Focus on the specific question asked
+
+Document Context:
+${context}
+
+Conversation History:
+${chatHistory}
+
+Current User Question: ${message}
+
+Provide a helpful, concise response:`;
+
+        const responseText = await callBedrock(prompt, 0, responseMaxTokens);
+
+        // Validate response before saving
+        if (!responseText || responseText.trim().length === 0) {
+            throw new Error('Empty response received from AI model');
+        }
+
+        // Save bot response with error handling
         await new Promise((resolve, reject) => {
             db.run('INSERT INTO messages (chatId, sender, text) VALUES (?, ?, ?)',
                 [chatId, 'bot', responseText],
-                (err) => {
-                    if (err) reject(err);
-                    else resolve();
+                function(err) {
+                    if (err) {
+                        console.error('Error saving bot response:', err);
+                        reject(err);
+                    } else {
+                        console.log(`Bot response saved for chat ${chatId}, message ID: ${this.lastID}`);
+                        resolve();
+                    }
                 }
             );
         });
 
-        res.json({
+        // Enhanced response with metadata
+        const response = {
             response: responseText,
             chatId: chatId,
-            topic: chatTopic
-        });
+            topic: chatTopic,
+            documentsUsed: documentsToUse.map(d => ({
+                id: d.id,
+                name: d.originalName
+            })),
+            responseMetadata: {
+                documentsAnalyzed: documentsToUse.length,
+                responseLength: responseText.length,
+                maxTokensUsed: responseMaxTokens
+            }
+        };
+
+        console.log(`Chat response generated - Topic: ${chatTopic}, Documents used: ${documentsToUse.length}, Response length: ${responseText.length}`);
+        
+        res.json(response);
     } catch (error) {
         console.error('Chat error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        
+        // Enhanced error handling with specific error types
+        let errorMessage = 'Internal server error';
+        let statusCode = 500;
+        
+        if (error.message.includes('Database did not initialize')) {
+            errorMessage = 'Database connection error. Please try again later.';
+            statusCode = 503;
+        } else if (error.message.includes('Failed to get response from AI model')) {
+            errorMessage = 'AI service temporarily unavailable. Please try again.';
+            statusCode = 503;
+        } else if (error.message.includes('Empty response received')) {
+            errorMessage = 'Invalid response from AI. Please rephrase your question.';
+            statusCode = 422;
+        } else if (error.name === 'ThrottlingException') {
+            errorMessage = 'Service is busy. Please wait a moment and try again.';
+            statusCode = 429;
+        }
+        
+        // Log error details for debugging
+        console.error(`Chat error details - User message: "${message}", Error: ${error.message}, Stack: ${error.stack}`);
+        
+        res.status(statusCode).json({ 
+            error: errorMessage,
+            timestamp: new Date().toISOString(),
+            chatId: chatId || null
+        });
     }
 });
 
@@ -430,6 +639,58 @@ app.get('/chats', async (req, res) => {
         res.json(chats);
     } catch (error) {
         console.error('Error fetching chats:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Enhanced endpoint to get available documents with metadata
+app.get('/documents/available', async (req, res) => {
+    try {
+        const db = await getDB();
+        const documents = await new Promise((resolve, reject) => {
+            db.all('SELECT id, originalName, uploadDate FROM documents ORDER BY uploadDate DESC', [], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+        
+        // Add file size and type information
+        const documentsWithMetadata = await Promise.all(documents.map(async (doc, index) => {
+            try {
+                const filePath = path.join(__dirname, 'uploads', doc.filename || doc.originalName);
+                const stats = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
+                const extension = path.extname(doc.originalName).toLowerCase();
+                
+                return {
+                    id: doc.id,
+                    name: doc.originalName,
+                    uploadDate: doc.uploadDate,
+                    size: stats ? stats.size : 0,
+                    type: extension,
+                    index: index + 1, // For user reference (file 1, file 2, etc.)
+                    available: !!stats
+                };
+            } catch (err) {
+                console.error(`Error getting metadata for ${doc.originalName}:`, err);
+                return {
+                    id: doc.id,
+                    name: doc.originalName,
+                    uploadDate: doc.uploadDate,
+                    size: 0,
+                    type: path.extname(doc.originalName).toLowerCase(),
+                    index: index + 1,
+                    available: false
+                };
+            }
+        }));
+        
+        res.json({
+            documents: documentsWithMetadata,
+            total: documentsWithMetadata.length,
+            message: "To reference a specific document in your question, mention its name or use 'file 1', 'file 2', etc."
+        });
+    } catch (error) {
+        console.error('Error fetching available documents:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
