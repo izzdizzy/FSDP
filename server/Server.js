@@ -10,6 +10,10 @@ const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-be
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
 const XLSX = require('xlsx'); // Added for Excel file support
+// Modular imports
+const upload = require('./middleware/upload');
+const helpers = require('./utils/helpers');
+const { getDB, callBedrock, analyzeUserMessageForFiles, isFileRelatedQuery, readFileContent, extractRelevantText } = require('./utils/helpers');
 
 const app = express();
 const PORT = process.env.APP_PORT || 3001;
@@ -43,290 +47,183 @@ const setupDb = () => {
             } else {
                 console.log('Connected to SQLite database');
                 db.serialize(() => {
-                    // Create documents table
-                    db.run(`
-            CREATE TABLE IF NOT EXISTS documents (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              filename TEXT UNIQUE,
-              originalName TEXT,
-              uploadDate DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-          `, (createErr) => {
+                    db.run(`CREATE TABLE IF NOT EXISTS documents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        filename TEXT UNIQUE,
+                        originalName TEXT,
+                        uploadDate DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )`, (createErr) => {
                         if (createErr) {
                             console.error('Documents table creation error:', createErr.message);
                             reject(createErr);
                         }
                     });
 
-                    // Create chats table
-                    db.run(`
-            CREATE TABLE IF NOT EXISTS chats (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              topic TEXT UNIQUE,
-              createdDate DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-          `, (createErr) => {
+                    db.run(`CREATE TABLE IF NOT EXISTS chats (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        topic TEXT UNIQUE,
+                        userId TEXT DEFAULT 'anonymous',
+                        messageCount INTEGER DEFAULT 0,
+                        totalLikes INTEGER DEFAULT 0,
+                        totalDislikes INTEGER DEFAULT 0,
+                        createdDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        lastActivity DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )`, (createErr) => {
                         if (createErr) {
                             console.error('Chats table creation error:', createErr.message);
                             reject(createErr);
                         }
                     });
 
-                    // Create messages table
-                    db.run(`
-            CREATE TABLE IF NOT EXISTS messages (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              chatId INTEGER,
-              sender TEXT,
-              text TEXT,
-              timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-              FOREIGN KEY (chatId) REFERENCES chats(id)
-            )
-          `, (createErr) => {
+                    db.run(`CREATE TABLE IF NOT EXISTS messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chatId INTEGER,
+                        sender TEXT,
+                        text TEXT,
+                        isLiked INTEGER DEFAULT NULL,
+                        documentsReferenced TEXT DEFAULT NULL,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (chatId) REFERENCES chats(id)
+                    )`, (createErr) => {
                         if (createErr) {
                             console.error('Messages table creation error:', createErr.message);
                             reject(createErr);
-                        } else {
-                            resolve(db);
                         }
                     });
+
+                    // Create settings table for app configuration
+                    db.run(`CREATE TABLE IF NOT EXISTS settings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        setting_key TEXT UNIQUE NOT NULL,
+                        setting_value TEXT,
+                        updated_by TEXT DEFAULT 'Admin@email.com',
+                        last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )`, (createErr) => {
+                        if (createErr) {
+                            console.error('Settings table creation error:', createErr.message);
+                            reject(createErr);
+                        } else {
+                            // Insert default greeting message if it doesn't exist
+                            db.run(`INSERT OR IGNORE INTO settings (setting_key, setting_value) 
+                                   VALUES ('greeting_message', 'Hello! I''m your AI assistant. How can I help you today?')`,
+                                (insertErr) => {
+                                    if (insertErr) {
+                                        console.error('Error inserting default greeting:', insertErr.message);
+                                    }
+                                });
+                        }
+                    });
+
+                    // Create template questions table
+                    db.run(`CREATE TABLE IF NOT EXISTS template_questions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        question TEXT NOT NULL,
+                        answer TEXT NOT NULL,
+                        updated_by TEXT DEFAULT 'Admin@email.com',
+                        last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        is_active INTEGER DEFAULT 1
+                    )`, (createErr) => {
+                        if (createErr) {
+                            console.error('Template questions table creation error:', createErr.message);
+                            reject(createErr);
+                        } else {
+                            // Insert some default template questions
+                            const defaultQuestions = [
+                                {
+                                    question: 'What documents are available?',
+                                    answer: 'I can help you with any documents that have been uploaded to the system. You can ask me about specific files or request information from them.'
+                                },
+                                {
+                                    question: 'How can you help me?',
+                                    answer: 'I can assist you with document queries, answer questions based on uploaded files, and provide general information. Feel free to ask me anything!'
+                                },
+                                {
+                                    question: 'What file formats do you support?',
+                                    answer: 'I currently support PDF, Word documents (.doc/.docx), and Excel files (.xlsx). You can upload these formats and I will help you extract information from them.'
+                                }
+                            ];
+                            
+                            defaultQuestions.forEach(q => {
+                                db.run(`INSERT OR IGNORE INTO template_questions (question, answer) VALUES (?, ?)`,
+                                    [q.question, q.answer], (insertErr) => {
+                                        if (insertErr) {
+                                            console.error('Error inserting default template question:', insertErr.message);
+                                        }
+                                    });
+                            });
+                        }
+                    });
+
+                    resolve(db);
                 });
             }
         });
     });
 };
 
-let database;
 setupDb().then((dbInstance) => {
     database = dbInstance;
     console.log('Database initialized successfully');
+
+    // Import and use routes only after DB is ready
+    const chatRoutes = require('./routes/chatRoutes');
+    const documentRoutes = require('./routes/documentRoutes');
+    app.use('/', chatRoutes(database, helpers));
+    app.use('/', documentRoutes(database, upload, helpers));
+
+    app.listen(PORT, () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+    });
 }).catch((err) => {
     console.error('Failed to initialize database:', err);
 });
 
-const getDB = () => {
-    return new Promise((resolve, reject) => {
-        if (database) return resolve(database);
-        let attempts = 0;
-        const interval = setInterval(() => {
-            if (database) {
-                clearInterval(interval);
-                resolve(database);
-            } else if (attempts++ > 20) {
-                clearInterval(interval);
-                reject(new Error("Database did not initialize"));
-            }
-        }, 100);
-    });
-};
-
-// Helper function to read file content
-// Enhanced function to read different file types with full content access
-const readFileContent = async (filePath, originalName) => {
-    try {
-        const extension = path.extname(originalName).toLowerCase();
-
-        // Handle PDF files - Get full content, not truncated
-        if (extension === '.pdf') {
-            const dataBuffer = fs.readFileSync(filePath);
-            const data = await pdfParse(dataBuffer);
-            return data.text;
-        }
-
-        // Handle DOCX files
-        if (extension === '.docx') {
-            const result = await mammoth.extractRawText({ path: filePath });
-            return result.value;
-        }
-
-        // Handle DOC files (basic support - may need additional library for full support)
-        if (extension === '.doc') {
-            return '[DOC file detected - full text extraction not supported in this implementation]';
-        }
-
-        // Handle TXT and other text-based files
-        if (['.txt', '.md', '.csv'].includes(extension)) {
-            return fs.readFileSync(filePath, 'utf8');
-        }
-        
-        // Handle Excel files with full content extraction
-        if (extension === '.xlsx' || extension === '.xls') {
-            const workbook = XLSX.readFile(filePath);
-            let excelText = '';
-
-            workbook.SheetNames.forEach(sheetName => {
-                const sheet = workbook.Sheets[sheetName];
-                excelText += `\nSheet: ${sheetName}\n`;
-                excelText += XLSX.utils.sheet_to_csv(sheet);
-            });
-
-            return excelText;
-        }
-
-        // Default case for unsupported formats
-        return `[Unsupported file format: ${extension}]`;
-    } catch (error) {
-        console.error(`Error reading file ${originalName}:`, error);
-        return `[Error reading file: ${error.message}]`;
-    }
-};
-
-// Helper function to analyze user message for specific file requests
-const analyzeUserMessageForFiles = (message, availableDocuments) => {
-    const requestedFiles = [];
-    const messageLower = message.toLowerCase();
-    
-    // Look for explicit file mentions
-    for (const doc of availableDocuments) {
-        const fileNameLower = doc.originalName.toLowerCase();
-        const fileNameWithoutExt = path.parse(doc.originalName).name.toLowerCase();
-        
-        // Check if user mentions the file by name (with or without extension)
-        if (messageLower.includes(fileNameLower) || 
-            messageLower.includes(fileNameWithoutExt) ||
-            messageLower.includes(doc.originalName.toLowerCase())) {
-            requestedFiles.push(doc);
-        }
-    }
-    
-    // Look for patterns like "file 1", "document 2", etc.
-    const fileNumberMatch = messageLower.match(/(?:file|document|doc)\s*(\d+)/g);
-    if (fileNumberMatch && availableDocuments.length > 0) {
-        fileNumberMatch.forEach(match => {
-            const numberMatch = match.match(/(\d+)/);
-            if (numberMatch) {
-                const fileIndex = parseInt(numberMatch[1]) - 1; // Convert to 0-based index
-                if (fileIndex >= 0 && fileIndex < availableDocuments.length) {
-                    if (!requestedFiles.find(f => f.id === availableDocuments[fileIndex].id)) {
-                        requestedFiles.push(availableDocuments[fileIndex]);
-                    }
-                }
-            }
-        });
-    }
-    
-    return requestedFiles;
-};
-
-// Helper function to check if message requests file information
-const isFileRelatedQuery = (message) => {
-    const fileKeywords = [
-        'document', 'file', 'pdf', 'upload', 'handbook', 'manual', 'report', 
-        'policy', 'procedure', 'guideline', 'attachment', 'doc', 'sheet'
-    ];
-    const messageLower = message.toLowerCase();
-    return fileKeywords.some(keyword => messageLower.includes(keyword));
-};
-
-// Helper function to call AWS Bedrock with retry logic 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-const callBedrock = async (prompt, retryCount = 0, maxTokens = 1000) => {
-    try {
-        const modelId = 'anthropic.claude-v2';
-
-        const input = {
-            modelId: modelId,
-            contentType: 'application/json',
-            accept: 'application/json',
-            body: JSON.stringify({
-                anthropic_version: "bedrock-2023-05-31",
-                max_tokens: maxTokens, // Now configurable to control response length
-                messages: [
-                    {
-                        role: "user",
-                        content: prompt
-                    }
-                ]
-            })
-        };
-
-        const command = new InvokeModelCommand(input);
-        const response = await bedrockClient.send(command);
-        const decodedResponseBody = new TextDecoder().decode(response.body);
-        const responseBody = JSON.parse(decodedResponseBody);
-
-        return responseBody.content[0].text.trim();
-    } catch (error) {
-        console.error('Error calling Bedrock:', error);
-
-        // Handle throttling with exponential backoff
-        if (error.name === 'ThrottlingException' && retryCount < 3) {
-            const delayMs = Math.pow(2, retryCount) * 1000; // 1s, 2s, 4s
-            console.log(`Throttled! Retrying in ${delayMs}ms... (Attempt ${retryCount + 1})`);
-            await delay(delayMs);
-            return callBedrock(prompt, retryCount + 1, maxTokens);
-        }
-
-        throw new Error('Failed to get response from AI model');
-    }
-};
-
-// Helper function to extract relevant text from a document based on user query
-const extractRelevantText = (content, query) => {
-    try {
-        const queryWords = query.toLowerCase().split(/\s+/);
-        const contentLines = content.split('\n');
-
-        // Find lines containing query words
-        const relevantLines = contentLines.filter(line => {
-            const lineLower = line.toLowerCase();
-            return queryWords.some(word => lineLower.includes(word));
-        });
-
-        // Combine relevant lines into a single string
-        const relevantText = relevantLines.join('\n');
-
-        // Limit the size of the relevant text to prevent excessive characters
-        const maxLength = 2000; // Adjust as needed
-        return relevantText.length > maxLength ? relevantText.substring(0, maxLength) + '... [truncated]' : relevantText;
-    } catch (error) {
-        console.error('Error extracting relevant text:', error);
-        return '[Error extracting relevant text]';
-    }
-};
-
-// Chat routes
 app.post('/chat', async (req, res) => {
+    const { message, chatId: initialChatId, chatTopic } = req.body;
+    console.log('Received message:', message);
+
+    // Basic input validation
+    if (!message || typeof message !== 'string' || message.trim().length === 0) {
+        return res.status(400).json({ error: 'Invalid message input' });
+    }
+
+    let db;
+    let chatId = initialChatId; // Change from const to let to allow reassignment
     try {
-        const { message, topic } = req.body;
+        db = await getDB();
 
-        if (!message) {
-            return res.status(400).json({ error: 'Message is required' });
-        }
-
-        const db = await getDB();
-
-        // If topic is provided, get or create chat
-        let chatId;
-        let chatTopic;
-        if (topic) {
-            // Get existing chat by topic or create new one
+        // If chatId is provided, use existing chat
+        if (chatId) {
+            // Validate chatId
             const chat = await new Promise((resolve, reject) => {
-                db.get('SELECT id FROM chats WHERE topic = ?', [topic], (err, row) => {
+                db.get('SELECT id FROM chats WHERE id = ?', [chatId], (err, row) => {
                     if (err) reject(err);
                     else resolve(row);
                 });
             });
 
-            if (chat) {
-                chatId = chat.id;
-                chatTopic = topic;
-            } else {
-                // Create new chat with the provided topic
-                const result = await new Promise((resolve, reject) => {
-                    db.run('INSERT INTO chats (topic) VALUES (?)', [topic], function (err) {
-                        if (err) reject(err);
-                        else resolve(this);
-                    });
-                });
-                chatId = result.lastID;
-                chatTopic = topic;
+            if (!chat) {
+                return res.status(404).json({ error: 'Chat not found' });
             }
+
+            // Save user message
+            await new Promise((resolve, reject) => {
+                db.run('INSERT INTO messages (chatId, sender, text) VALUES (?, ?, ?)',
+                    [chatId, 'user', message],
+                    (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                    }
+                );
+            });
         } else {
-            // If no topic provided, generate one based on first message
-            const generatedTopic = message.substring(0, 50) + (message.length > 50 ? '...' : '');
-            chatTopic = generatedTopic;
+            // New chat - generate topic using AI
+            const generatedTopic = generateChatTopic(message);
+
+            // Check if topic generation was successful
+            if (!generatedTopic) {
+                return res.status(500).json({ error: 'Failed to generate chat topic' });
+            }
 
             // Check if chat with this topic already exists
             const existingChat = await new Promise((resolve, reject) => {
@@ -338,33 +235,50 @@ app.post('/chat', async (req, res) => {
 
             if (existingChat) {
                 chatId = existingChat.id;
+                // Update last activity for existing chat
+                await new Promise((resolve, reject) => {
+                    db.run('UPDATE chats SET lastActivity = CURRENT_TIMESTAMP WHERE id = ?', [chatId], (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                    });
+                });
             } else {
                 // Create new chat with generated topic
                 const result = await new Promise((resolve, reject) => {
-                    db.run('INSERT INTO chats (topic) VALUES (?)', [generatedTopic], function (err) {
+                    db.run('INSERT INTO chats (topic, userId, messageCount) VALUES (?, ?, ?)', 
+                        [generatedTopic, 'anonymous', 0], function (err) {
                         if (err) reject(err);
                         else resolve(this);
                     });
                 });
                 chatId = result.lastID;
             }
-        }
 
-        // Save user message
-        await new Promise((resolve, reject) => {
-            db.run('INSERT INTO messages (chatId, sender, text) VALUES (?, ?, ?)',
-                [chatId, 'user', message],
-                (err) => {
+            // Save user message
+            await new Promise((resolve, reject) => {
+                db.run('INSERT INTO messages (chatId, sender, text) VALUES (?, ?, ?)',
+                    [chatId, 'user', message],
+                    (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                    }
+                );
+            });
+
+            // Update message count for the chat
+            await new Promise((resolve, reject) => {
+                db.run('UPDATE chats SET messageCount = messageCount + 1, lastActivity = CURRENT_TIMESTAMP WHERE id = ?', 
+                    [chatId], (err) => {
                     if (err) reject(err);
                     else resolve();
-                }
-            );
-        });
+                });
+            });
+        }
 
         // Get context from documents - Enhanced selective file loading
         let context = 'No documents available.';
         let documentsToUse = [];
-        
+
         try {
             // Get all available documents
             const allDocuments = await new Promise((resolve, reject) => {
@@ -377,12 +291,12 @@ app.post('/chat', async (req, res) => {
             if (allDocuments.length > 0) {
                 // Check if user specifically requested certain files
                 const requestedFiles = analyzeUserMessageForFiles(message, allDocuments);
-                
+
                 // If specific files are requested, use only those
                 if (requestedFiles.length > 0) {
                     documentsToUse = requestedFiles;
                     console.log(`User requested specific files: ${requestedFiles.map(f => f.originalName).join(', ')}`);
-                } 
+                }
                 // If the query is file-related but no specific files mentioned, use all
                 else if (isFileRelatedQuery(message)) {
                     documentsToUse = allDocuments;
@@ -397,12 +311,12 @@ app.post('/chat', async (req, res) => {
                 // Load content for selected documents
                 if (documentsToUse.length > 0) {
                     context = 'Available documents:\n';
-                    
+
                     // Process documents with performance optimization
                     const documentPromises = documentsToUse.map(async (doc) => {
                         try {
                             const filePath = path.join(__dirname, 'uploads', doc.filename);
-                            
+
                             // Check if file exists before trying to read
                             if (!fs.existsSync(filePath)) {
                                 console.error(`File not found: ${filePath}`);
@@ -412,12 +326,12 @@ app.post('/chat', async (req, res) => {
                                     error: true
                                 };
                             }
-                            
+
                             const content = await readFileContent(filePath, doc.originalName);
-                            
+
                             // Extract relevant text based on user query
                             const relevantContent = extractRelevantText(content, message);
-                            
+
                             return {
                                 name: doc.originalName,
                                 content: relevantContent,
@@ -432,10 +346,10 @@ app.post('/chat', async (req, res) => {
                             };
                         }
                     });
-                    
+
                     // Wait for all documents to be processed
                     const documentResults = await Promise.all(documentPromises);
-                    
+
                     // Build context string
                     documentResults.forEach(result => {
                         context += `\nDocument: ${result.name}\n`;
@@ -446,7 +360,7 @@ app.post('/chat', async (req, res) => {
                         }
                         context += '---\n';
                     });
-                    
+
                     // Add document listing for user reference
                     context += `\nDocuments used in this response: ${documentResults.map(r => r.name).join(', ')}\n`;
                 }
@@ -460,7 +374,7 @@ app.post('/chat', async (req, res) => {
         let chatHistory = '';
         try {
             const messages = await new Promise((resolve, reject) => {
-                db.all('SELECT sender, text FROM messages WHERE chatId = ? ORDER BY timestamp',
+                db.all('SELECT id, sender, text, isLiked, documentsReferenced, timestamp FROM messages WHERE chatId = ? ORDER BY timestamp',
                     [chatId],
                     (err, rows) => {
                         if (err) reject(err);
@@ -483,21 +397,21 @@ app.post('/chat', async (req, res) => {
 
         // Generate response using Bedrock with enhanced context and response control
         let responseMaxTokens = 800; // Default shorter responses
-        
+
         // Adjust response length based on query complexity
         if (documentsToUse.length > 0 || message.length > 200) {
             responseMaxTokens = 1200; // Longer responses for document-based or complex queries
         }
-        
+
         // Enhanced prompt with better instructions
         const prompt = `You are a helpful AI assistant. Follow these guidelines:
 
 RESPONSE LENGTH: Keep responses concise and to the point. Aim for 2-4 paragraphs maximum unless the user specifically asks for detailed information.
 
-DOCUMENT USAGE: ${documentsToUse.length > 0 ? 
-    `The user has access to specific documents. Use ONLY the provided document content to answer questions about those documents. Documents available: ${documentsToUse.map(d => d.originalName).join(', ')}` : 
-    'Only use documents if the user specifically mentions them or asks about uploaded files.'
-}
+DOCUMENT USAGE: ${documentsToUse.length > 0 ?
+                `The user has access to specific documents. Use ONLY the provided document content to answer questions about those documents. Documents available: ${documentsToUse.map(d => d.originalName).join(', ')}` :
+                'Only use documents if the user specifically mentions them or asks about uploaded files.'
+            }
 
 INSTRUCTIONS:
 1. Answer directly and concisely
@@ -523,11 +437,14 @@ Provide a helpful, concise response:`;
             throw new Error('Empty response received from AI model');
         }
 
-        // Save bot response with error handling
+        // Save bot response with error handling and document references
+        const documentsReferencedJson = documentsToUse.length > 0 ? 
+            JSON.stringify(documentsToUse.map(d => ({ id: d.id, name: d.originalName }))) : null;
+        
         await new Promise((resolve, reject) => {
-            db.run('INSERT INTO messages (chatId, sender, text) VALUES (?, ?, ?)',
-                [chatId, 'bot', responseText],
-                function(err) {
+            db.run('INSERT INTO messages (chatId, sender, text, documentsReferenced) VALUES (?, ?, ?, ?)',
+                [chatId, 'bot', responseText, documentsReferencedJson],
+                function (err) {
                     if (err) {
                         console.error('Error saving bot response:', err);
                         reject(err);
@@ -539,11 +456,31 @@ Provide a helpful, concise response:`;
             );
         });
 
+        // Update message count for bot response
+        await new Promise((resolve, reject) => {
+            db.run('UPDATE chats SET messageCount = messageCount + 1, lastActivity = CURRENT_TIMESTAMP WHERE id = ?', 
+                [chatId], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
+        // Get the updated chat information for response
+        const updatedChat = await new Promise((resolve, reject) => {
+            db.get('SELECT topic, messageCount, totalLikes, totalDislikes FROM chats WHERE id = ?', 
+                [chatId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
         // Enhanced response with metadata
         const response = {
             response: responseText,
             chatId: chatId,
-            topic: chatTopic,
+            topic: updatedChat ? updatedChat.topic : chatTopic,
+            isNewChat: !initialChatId, // Flag to indicate if this is a new chat session
+            chatInfo: updatedChat,
             documentsUsed: documentsToUse.map(d => ({
                 id: d.id,
                 name: d.originalName
@@ -556,15 +493,15 @@ Provide a helpful, concise response:`;
         };
 
         console.log(`Chat response generated - Topic: ${chatTopic}, Documents used: ${documentsToUse.length}, Response length: ${responseText.length}`);
-        
+
         res.json(response);
     } catch (error) {
         console.error('Chat error:', error);
-        
+
         // Enhanced error handling with specific error types
         let errorMessage = 'Internal server error';
         let statusCode = 500;
-        
+
         if (error.message.includes('Database did not initialize')) {
             errorMessage = 'Database connection error. Please try again later.';
             statusCode = 503;
@@ -578,11 +515,11 @@ Provide a helpful, concise response:`;
             errorMessage = 'Service is busy. Please wait a moment and try again.';
             statusCode = 429;
         }
-        
+
         // Log error details for debugging
         console.error(`Chat error details - User message: "${message}", Error: ${error.message}, Stack: ${error.stack}`);
-        
-        res.status(statusCode).json({ 
+
+        res.status(statusCode).json({
             error: errorMessage,
             timestamp: new Date().toISOString(),
             chatId: chatId || null
@@ -610,7 +547,7 @@ app.get('/chat/:topic', async (req, res) => {
 
         // Get messages for this chat
         const messages = await new Promise((resolve, reject) => {
-            db.all('SELECT sender, text FROM messages WHERE chatId = ? ORDER BY timestamp',
+            db.all('SELECT id, sender, text, isLiked, documentsReferenced, timestamp FROM messages WHERE chatId = ? ORDER BY timestamp',
                 [chat.id],
                 (err, rows) => {
                     if (err) reject(err);
@@ -626,12 +563,13 @@ app.get('/chat/:topic', async (req, res) => {
     }
 });
 
-// Get all chats (topics)
+// Get all chats (topics) with enhanced metadata
 app.get('/chats', async (req, res) => {
     try {
         const db = await getDB();
         const chats = await new Promise((resolve, reject) => {
-            db.all('SELECT topic FROM chats ORDER BY createdDate DESC', [], (err, rows) => {
+            db.all(`SELECT id, topic, userId, messageCount, totalLikes, totalDislikes, 
+                    createdDate, lastActivity FROM chats ORDER BY lastActivity DESC`, [], (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows);
             });
@@ -639,6 +577,169 @@ app.get('/chats', async (req, res) => {
         res.json(chats);
     } catch (error) {
         console.error('Error fetching chats:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Like/Dislike a bot response
+app.post('/messages/:messageId/reaction', async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const { isLiked } = req.body; // true for like, false for dislike, null to remove reaction
+        
+        if (isLiked !== null && typeof isLiked !== 'boolean') {
+            return res.status(400).json({ error: 'isLiked must be true, false, or null' });
+        }
+
+        const db = await getDB();
+        
+        // Get the message to find its chat
+        const message = await new Promise((resolve, reject) => {
+            db.get('SELECT chatId, sender, isLiked as currentReaction FROM messages WHERE id = ?', 
+                [messageId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        if (message.sender !== 'bot') {
+            return res.status(400).json({ error: 'Can only react to bot messages' });
+        }
+
+        // Calculate the change in likes/dislikes for the chat totals
+        let likeDelta = 0;
+        let dislikeDelta = 0;
+
+        // Remove previous reaction from totals
+        if (message.currentReaction === 1) likeDelta -= 1;
+        if (message.currentReaction === 0) dislikeDelta -= 1;
+
+        // Add new reaction to totals
+        if (isLiked === true) likeDelta += 1;
+        if (isLiked === false) dislikeDelta += 1;
+
+        // Update the message reaction
+        await new Promise((resolve, reject) => {
+            db.run('UPDATE messages SET isLiked = ? WHERE id = ?', 
+                [isLiked], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
+        // Update chat totals
+        await new Promise((resolve, reject) => {
+            db.run('UPDATE chats SET totalLikes = totalLikes + ?, totalDislikes = totalDislikes + ? WHERE id = ?',
+                [likeDelta, dislikeDelta, message.chatId], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
+        res.json({ 
+            success: true, 
+            reaction: isLiked,
+            message: isLiked === true ? 'Message liked' : 
+                     isLiked === false ? 'Message disliked' : 'Reaction removed'
+        });
+    } catch (error) {
+        console.error('Error updating message reaction:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Get detailed chat sessions for admin view
+app.get('/chat-sessions', async (req, res) => {
+    try {
+        const db = await getDB();
+        
+        // Get all chat sessions with metadata
+        const chatSessions = await new Promise((resolve, reject) => {
+            db.all(`SELECT 
+                        c.id,
+                        c.topic,
+                        c.userId,
+                        c.messageCount,
+                        c.totalLikes,
+                        c.totalDislikes,
+                        c.createdDate,
+                        c.lastActivity,
+                        DATE(c.createdDate) as date,
+                        TIME(c.createdDate) as time
+                    FROM chats c 
+                    ORDER BY c.lastActivity DESC`, [], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+
+        res.json({
+            sessions: chatSessions,
+            total: chatSessions.length
+        });
+    } catch (error) {
+        console.error('Error fetching chat sessions:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Get detailed messages for a specific chat session
+app.get('/chat-sessions/:chatId/messages', async (req, res) => {
+    try {
+        const { chatId } = req.params;
+        const db = await getDB();
+        
+        // Verify chat exists
+        const chat = await new Promise((resolve, reject) => {
+            db.get('SELECT * FROM chats WHERE id = ?', [chatId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!chat) {
+            return res.status(404).json({ error: 'Chat session not found' });
+        }
+
+        // Get all messages with detailed information
+        const messages = await new Promise((resolve, reject) => {
+            db.all(`SELECT 
+                        m.id,
+                        m.sender,
+                        m.text,
+                        m.isLiked,
+                        m.documentsReferenced,
+                        m.timestamp,
+                        DATE(m.timestamp) as date,
+                        TIME(m.timestamp) as time
+                    FROM messages m 
+                    WHERE m.chatId = ? 
+                    ORDER BY m.timestamp ASC`, [chatId], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+
+        // Parse document references
+        const enhancedMessages = messages.map(msg => ({
+            ...msg,
+            documentsReferenced: msg.documentsReferenced ? 
+                JSON.parse(msg.documentsReferenced) : null,
+            reactionStatus: msg.isLiked === null ? 'none' : 
+                           msg.isLiked === 1 ? 'liked' : 'disliked'
+        }));
+
+        res.json({
+            chatInfo: chat,
+            messages: enhancedMessages,
+            messageCount: messages.length
+        });
+    } catch (error) {
+        console.error('Error fetching chat session messages:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -653,14 +754,14 @@ app.get('/documents/available', async (req, res) => {
                 else resolve(rows);
             });
         });
-        
+
         // Add file size and type information
         const documentsWithMetadata = await Promise.all(documents.map(async (doc, index) => {
             try {
                 const filePath = path.join(__dirname, 'uploads', doc.filename || doc.originalName);
                 const stats = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
                 const extension = path.extname(doc.originalName).toLowerCase();
-                
+
                 return {
                     id: doc.id,
                     name: doc.originalName,
@@ -683,7 +784,7 @@ app.get('/documents/available', async (req, res) => {
                 };
             }
         }));
-        
+
         res.json({
             documents: documentsWithMetadata,
             total: documentsWithMetadata.length,
@@ -702,8 +803,6 @@ const storage = multer.diskStorage({
         cb(null, file.originalname);
     },
 });
-
-const upload = multer({ storage });
 
 app.post('/upload', upload.single('document'), async (req, res) => {
     try {
@@ -844,6 +943,206 @@ app.get('/documents/:id/file', async (req, res) => {
     }
 });
 
+// Settings endpoints
+// GET settings
+app.get('/settings', async (req, res) => {
+    try {
+        const db = await getDB();
+        
+        // Get greeting message setting
+        const greetingSetting = await new Promise((resolve, reject) => {
+            db.get('SELECT setting_value, updated_by, last_updated FROM settings WHERE setting_key = ?', 
+                ['greeting_message'], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        const settings = {
+            greetingMessage: greetingSetting ? greetingSetting.setting_value : 'Hello! I\'m your AI assistant. How can I help you today?',
+            updatedBy: greetingSetting ? greetingSetting.updated_by : 'Admin@email.com',
+            lastUpdated: greetingSetting ? greetingSetting.last_updated : new Date().toISOString()
+        };
+
+        res.json(settings);
+    } catch (error) {
+        console.error('Error fetching settings:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// POST settings (save)
+app.post('/settings', async (req, res) => {
+    try {
+        const { greetingMessage, updatedBy } = req.body;
+        
+        if (!greetingMessage || greetingMessage.trim().length === 0) {
+            return res.status(400).json({ error: 'Greeting message is required' });
+        }
+
+        if (greetingMessage.length > 500) {
+            return res.status(400).json({ error: 'Greeting message must be 500 characters or less' });
+        }
+
+        const db = await getDB();
+        const now = new Date().toISOString();
+        
+        // Update or insert greeting message setting
+        await new Promise((resolve, reject) => {
+            db.run(`INSERT OR REPLACE INTO settings (setting_key, setting_value, updated_by, last_updated) 
+                   VALUES ('greeting_message', ?, ?, ?)`,
+                [greetingMessage.trim(), updatedBy || 'Admin@email.com', now],
+                function(err) {
+                    if (err) reject(err);
+                    else resolve();
+                }
+            );
+        });
+
+        res.json({
+            success: true,
+            message: 'Settings updated successfully',
+            lastUpdated: now
+        });
+    } catch (error) {
+        console.error('Error saving settings:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Template questions endpoints
+// GET template questions
+app.get('/template-questions', async (req, res) => {
+    try {
+        const db = await getDB();
+        
+        const questions = await new Promise((resolve, reject) => {
+            db.all('SELECT * FROM template_questions WHERE is_active = 1 ORDER BY last_updated DESC', 
+                [], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+
+        res.json({
+            questions: questions,
+            total: questions.length
+        });
+    } catch (error) {
+        console.error('Error fetching template questions:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// POST template questions (create)
+app.post('/template-questions', async (req, res) => {
+    try {
+        const { question, answer, updatedBy } = req.body;
+        
+        if (!question || !answer || question.trim().length === 0 || answer.trim().length === 0) {
+            return res.status(400).json({ error: 'Question and answer are required' });
+        }
+
+        const db = await getDB();
+        const now = new Date().toISOString();
+        
+        await new Promise((resolve, reject) => {
+            db.run('INSERT INTO template_questions (question, answer, updated_by, last_updated) VALUES (?, ?, ?, ?)',
+                [question.trim(), answer.trim(), updatedBy || 'Admin@email.com', now],
+                function(err) {
+                    if (err) reject(err);
+                    else resolve(this.lastID);
+                }
+            );
+        });
+
+        res.json({
+            success: true,
+            message: 'Template question created successfully'
+        });
+    } catch (error) {
+        console.error('Error creating template question:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// PUT template questions (update)
+app.put('/template-questions/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { question, answer, updatedBy } = req.body;
+        
+        if (!question || !answer || question.trim().length === 0 || answer.trim().length === 0) {
+            return res.status(400).json({ error: 'Question and answer are required' });
+        }
+
+        const db = await getDB();
+        const now = new Date().toISOString();
+        
+        await new Promise((resolve, reject) => {
+            db.run('UPDATE template_questions SET question = ?, answer = ?, updated_by = ?, last_updated = ? WHERE id = ?',
+                [question.trim(), answer.trim(), updatedBy || 'Admin@email.com', now, id],
+                function(err) {
+                    if (err) reject(err);
+                    else if (this.changes === 0) reject(new Error('Template question not found'));
+                    else resolve();
+                }
+            );
+        });
+
+        res.json({
+            success: true,
+            message: 'Template question updated successfully'
+        });
+    } catch (error) {
+        if (error.message === 'Template question not found') {
+            res.status(404).json({ error: 'Template question not found' });
+        } else {
+            console.error('Error updating template question:', error);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    }
+});
+
+// DELETE template questions
+app.delete('/template-questions/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const db = await getDB();
+        
+        // Soft delete - mark as inactive
+        await new Promise((resolve, reject) => {
+            db.run('UPDATE template_questions SET is_active = 0 WHERE id = ?',
+                [id],
+                function(err) {
+                    if (err) reject(err);
+                    else if (this.changes === 0) reject(new Error('Template question not found'));
+                    else resolve();
+                }
+            );
+        });
+
+        res.json({
+            success: true,
+            message: 'Template question deleted successfully'
+        });
+    } catch (error) {
+        if (error.message === 'Template question not found') {
+            res.status(404).json({ error: 'Template question not found' });
+        } else {
+            console.error('Error deleting template question:', error);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
+
+// Add a helper function to generate chat topics
+const generateChatTopic = (message) => {
+    // Simple logic to generate a topic based on the message
+    // Replace this with AI or more complex logic if needed
+    return message.split(' ').slice(0, 3).join(' ').trim() || 'General';
+};

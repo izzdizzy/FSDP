@@ -5,6 +5,9 @@ import './css/App.css';
 import HomePage from './pages/Home-Page';
 import DocumentsPage from './pages/doc-page';
 import ChatbotPage from './pages/chatbot';
+import ChatSessions from './pages/ChatSessions';
+import Settings from './pages/Settings';
+import TemplateQuestions from './pages/TemplateQuestions';
 
 function App() {
   const [role, setRole] = useState(localStorage.getItem('role') || 'user');
@@ -29,6 +32,24 @@ function App() {
           path="/documents"
           element={
             role === 'admin' ? <DocumentsPage role={role} handleLogin={handleLogin} /> : <Navigate to="/" />
+          }
+        />
+        <Route
+          path="/chat-sessions"
+          element={
+            role === 'admin' ? <ChatSessions role={role} handleLogin={handleLogin} /> : <Navigate to="/" />
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            role === 'admin' ? <Settings role={role} handleLogin={handleLogin} /> : <Navigate to="/" />
+          }
+        />
+        <Route
+          path="/template-questions"
+          element={
+            role === 'admin' ? <TemplateQuestions role={role} handleLogin={handleLogin} /> : <Navigate to="/" />
           }
         />
         <Route path="/chatbot" element={<ChatbotPage role={role} handleLogin={handleLogin} />} />

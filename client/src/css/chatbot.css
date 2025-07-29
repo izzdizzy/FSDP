@@ -1,16 +1,15 @@
 /* src/css/chatbot.css */
 .chatbot-container {
-  width: 100vw;
-  height: 100vh;
   background-color: #ffffff;
-  display: flex;
+  width: 100vw;
+  max-height: 75vh;
   flex-direction: column;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
 }
 
 .chatbot-main {
   display: flex;
-  flex: 1;
+  height: 75vh;
   overflow: hidden;
 }
 
@@ -358,4 +357,241 @@
 .chatbot-messages::-webkit-scrollbar-thumb:hover,
 .sidebar-chats::-webkit-scrollbar-thumb:hover {
   background: #a1a1a1;
+}
+
+/* Enhanced Chat Item Styles */
+.chat-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.chat-topic {
+  font-weight: 500;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-metadata {
+  color: #666;
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.no-chats {
+  padding: 20px;
+  text-align: center;
+  color: #666;
+  font-style: italic;
+}
+
+/* Enhanced Header Styles */
+.chatbot-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border-bottom: 1px solid #e5e5e5;
+  background-color: #fff;
+}
+
+.header-content {
+  flex: 1;
+}
+
+.header-content h2 {
+  margin: 0 0 4px 0;
+  color: #333;
+  font-size: 1.25rem;
+}
+
+.chat-stats {
+  color: #666;
+  font-size: 0.85rem;
+}
+
+/* Enhanced Message Styles */
+.message {
+  margin-bottom: 16px;
+  max-width: 85%;
+  animation: slideIn 0.3s ease-out;
+}
+
+.message-content {
+  padding: 12px 16px;
+  border-radius: 18px;
+  line-height: 1.4;
+  word-wrap: break-word;
+}
+
+.message.user .message-content {
+  background-color: #007bff;
+  color: white;
+  margin-left: auto;
+  border-bottom-right-radius: 6px;
+}
+
+.message.bot .message-content {
+  background-color: #f1f3f4;
+  color: #333;
+  border-bottom-left-radius: 6px;
+}
+
+/* Reaction Buttons */
+.reaction-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.message.bot:hover .reaction-buttons {
+  opacity: 1;
+}
+
+.reaction-btn {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 16px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.reaction-btn:hover {
+  background: #e9ecef;
+  transform: translateY(-1px);
+}
+
+.reaction-btn.liked {
+  background: #d4edda;
+  border-color: #c3e6cb;
+  color: #155724;
+}
+
+.reaction-btn.disliked {
+  background: #f8d7da;
+  border-color: #f5c6cb;
+  color: #721c24;
+}
+
+.reaction-disabled {
+  font-size: 0.75rem;
+  color: #6c757d;
+  font-style: italic;
+}
+
+/* Welcome Section */
+.welcome-section {
+  padding: 20px;
+  text-align: center;
+}
+
+.template-questions {
+  margin-top: 30px;
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 12px;
+  border: 1px solid #dee2e6;
+}
+
+.template-questions h4 {
+  color: #333;
+  margin-bottom: 15px;
+  font-size: 1.1rem;
+}
+
+.question-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+  margin-top: 15px;
+}
+
+.template-question-btn {
+  background: white;
+  border: 2px solid #ea6666;
+  border-radius: 8px;
+  padding: 12px 16px;
+  color: #333;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.9rem;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.template-question-btn:hover {
+  background: #ea6666;
+  color: white;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(234, 102, 102, 0.3);
+}
+
+/* Document References */
+.document-references {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #e3f2fd;
+  border-radius: 8px;
+  border-left: 3px solid #2196f3;
+}
+
+.document-references small {
+  color: #1565c0;
+  font-size: 0.75rem;
+}
+
+/* Enhanced Typing Indicator */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.typing-indicator span {
+  height: 8px;
+  width: 8px;
+  background: #999;
+  border-radius: 50%;
+  animation: typing 1.4s infinite ease-in-out;
+}
+
+.typing-indicator span:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes typing {
+  0%, 80%, 100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

@@ -49,16 +49,48 @@ const Navbar = () => {
             Home
           </h2>
           {role === 'admin' && (
-            <h2
-              onClick={() => navigate('/documents')}
-              style={{
-                cursor: 'pointer',
-                color: location.pathname === '/documents' ? '#FFB221' : '#FFCDCD',
-              }}
-              className={location.pathname === '/documents' ? 'active' : ''}
-            >
-              Documents
-            </h2>
+            <>
+              <h2
+                onClick={() => navigate('/documents')}
+                style={{
+                  cursor: 'pointer',
+                  color: location.pathname === '/documents' ? '#FFB221' : '#FFCDCD',
+                }}
+                className={location.pathname === '/documents' ? 'active' : ''}
+              >
+                Documents
+              </h2>
+              <h2
+                onClick={() => navigate('/chat-sessions')}
+                style={{
+                  cursor: 'pointer',
+                  color: location.pathname === '/chat-sessions' ? '#FFB221' : '#FFCDCD',
+                }}
+                className={location.pathname === '/chat-sessions' ? 'active' : ''}
+              >
+                Chat Sessions
+              </h2>
+              <h2
+                onClick={() => navigate('/settings')}
+                style={{
+                  cursor: 'pointer',
+                  color: location.pathname === '/settings' ? '#FFB221' : '#FFCDCD',
+                }}
+                className={location.pathname === '/settings' ? 'active' : ''}
+              >
+                Settings
+              </h2>
+              <h2
+                onClick={() => navigate('/template-questions')}
+                style={{
+                  cursor: 'pointer',
+                  color: location.pathname === '/template-questions' ? '#FFB221' : '#FFCDCD',
+                }}
+                className={location.pathname === '/template-questions' ? 'active' : ''}
+              >
+                Templates
+              </h2>
+            </>
           )}
           <h2
             onClick={() => navigate('/chatbot')}
@@ -73,14 +105,28 @@ const Navbar = () => {
         </div>
         <div className="login-dropdown">
           <button className="login-button" onClick={toggleDropdown}>
-            Login
+            {role === 'admin' ? (
+              <span>Admin</span>
+            ) : role === 'user' ? (
+              <span>User</span>
+            ) : (
+              <span>Login</span>
+            )}
           </button>
           {dropdownOpen && (
             <div className="dropdown-menu">
               {role === 'admin' && (
-              <button onClick={() => handleLogin('user')}>User</button>
+                <button onClick={() => handleLogin('user')}>User</button>
               )}
-              <button onClick={() => handleLogin('admin')}>Admin</button>
+             {role !== 'admin' && (
+                <button onClick={() => handleLogin('admin')}>Admin</button>
+              )}
+              {!role && (
+                <>
+                  <button onClick={() => handleLogin('user')}>User</button>
+                  <button onClick={() => handleLogin('admin')}>Admin</button>
+                </>
+              )}
             </div>
           )}
         </div>
