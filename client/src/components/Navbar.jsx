@@ -4,40 +4,108 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import '../css/Navbar.css';
 
 const Navbar = () => {
+  // Translation object for navbar items
+  const translations = {
+    en: {
+      home: 'Home',
+      chatbot: 'Chatbot',
+      documents: 'Documents',
+      chatSessions: 'Chat Sessions',
+      chatbotSettings: 'Chatbot Settings',
+      templateQuestions: 'Template Questions',
+      login: 'Login',
+      loginUser: 'Login as User',
+      loginAdmin: 'Login as Admin',
+      logout: 'Log out',
+    },
+    zh: {
+      home: '主页',
+      chatbot: '聊天机器人',
+      documents: '文件',
+      chatSessions: '聊天会话',
+      chatbotSettings: '机器人设置',
+      templateQuestions: '模板问题',
+      login: '登录',
+      loginUser: '以用户身份登录',
+      loginAdmin: '以管理员身份登录',
+      logout: '登出',
+    }
+  };
+  // Language state, default to localStorage or 'en'
+  const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en');
+  const t = translations[language];
+
+  // Update language in localStorage and state
+  const handleLanguageChange = (lang) => {
+    setLanguage(lang);
+    localStorage.setItem('language', lang);
+    window.dispatchEvent(new Event('languageChanged'));
+  };
   const navigate = useNavigate();
   const location = useLocation();
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [role, setRole] = useState(localStorage.getItem('role') || 'user');
+  // Memoize role for performance, default to null (no role)
+  const [role, setRole] = useState(() => localStorage.getItem('role') || null);
 
+  // Sync role from localStorage on mount and when storage changes
   useEffect(() => {
-    const storedRole = localStorage.getItem('role');
-    if (storedRole) {
-      setRole(storedRole);
-    }
+    const handleStorage = () => {
+      const storedRole = localStorage.getItem('role');
+      setRole(storedRole || null);
+    };
+    window.addEventListener('storage', handleStorage);
+    handleStorage();
+    return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
+  // Toggle dropdown open/close
   const toggleDropdown = () => {
-    setDropdownOpen(!dropdownOpen);
+    setDropdownOpen((open) => !open);
   };
 
-  const handleLogin = (role) => {
-    localStorage.setItem('role', role);
-    setRole(role);
-    setDropdownOpen(false);
-    if (role === 'admin') {
-      navigate('/documents');
-    } else {
-      navigate('/');
+  // Handle login as user or admin
+  const handleLogin = (newRole) => {
+    try {
+      if (!['admin', 'user'].includes(newRole)) throw new Error('Invalid role');
+      localStorage.setItem('role', newRole);
+      setRole(newRole);
+      setDropdownOpen(false);
+      if (newRole === 'admin') {
+        navigate('/documents');
+      } else {
+        navigate('/');
+      }
+    } catch (err) {
+      alert('Login error: ' + err.message);
     }
+  };
+
+  // Handle logout
+  const handleLogout = () => {
+    localStorage.removeItem('role');
+    setRole(null);
+    setDropdownOpen(false);
+    navigate('/');
   };
 
   return (
     <div className="navbar-container">
       <div className="logo-container">
         <img id="logo" src="/SCCCI-logo.png" alt="Logo" className="logo" />
+      {/* Language dropdown beside logo */}
+      <select
+        value={language}
+        onChange={e => handleLanguageChange(e.target.value)}
+        style={{ marginLeft: '16px', fontSize: '1rem', padding: '2px 8px' }}
+        aria-label="Language selector"
+      >
+        <option value="en">English</option>
+        <option value="zh">中文</option>
+      </select>
       </div>
       <div className="navbar">
         <div className='menu-items'>
+          {/* Home is always visible */}
           <h2
             onClick={() => navigate('/')}
             style={{
@@ -46,52 +114,9 @@ const Navbar = () => {
             }}
             className={location.pathname === '/' ? 'active' : ''}
           >
-            Home
+            {t.home}
           </h2>
-          {role === 'admin' && (
-            <>
-              <h2
-                onClick={() => navigate('/documents')}
-                style={{
-                  cursor: 'pointer',
-                  color: location.pathname === '/documents' ? '#FFB221' : '#FFCDCD',
-                }}
-                className={location.pathname === '/documents' ? 'active' : ''}
-              >
-                Documents
-              </h2>
-              <h2
-                onClick={() => navigate('/chat-sessions')}
-                style={{
-                  cursor: 'pointer',
-                  color: location.pathname === '/chat-sessions' ? '#FFB221' : '#FFCDCD',
-                }}
-                className={location.pathname === '/chat-sessions' ? 'active' : ''}
-              >
-                Chat Sessions
-              </h2>
-              <h2
-                onClick={() => navigate('/settings')}
-                style={{
-                  cursor: 'pointer',
-                  color: location.pathname === '/settings' ? '#FFB221' : '#FFCDCD',
-                }}
-                className={location.pathname === '/settings' ? 'active' : ''}
-              >
-                Settings
-              </h2>
-              <h2
-                onClick={() => navigate('/template-questions')}
-                style={{
-                  cursor: 'pointer',
-                  color: location.pathname === '/template-questions' ? '#FFB221' : '#FFCDCD',
-                }}
-                className={location.pathname === '/template-questions' ? 'active' : ''}
-              >
-                Templates
-              </h2>
-            </>
-          )}
+          {/* Chatbot is always visible */}
           <h2
             onClick={() => navigate('/chatbot')}
             style={{
@@ -100,31 +125,42 @@ const Navbar = () => {
             }}
             className={location.pathname === '/chatbot' ? 'active' : ''}
           >
-            Chatbot
+            {t.chatbot}
           </h2>
         </div>
+        {/* Top right dropdown for login/admin/user/logout */}
         <div className="login-dropdown">
-          <button className="login-button" onClick={toggleDropdown}>
-            {role === 'admin' ? (
-              <span>Admin</span>
-            ) : role === 'user' ? (
-              <span>User</span>
-            ) : (
-              <span>Login</span>
-            )}
+          <button
+            className="login-button"
+            onClick={toggleDropdown}
+            aria-haspopup="true"
+            aria-expanded={dropdownOpen}
+            aria-label="Account menu"
+          >
+            {/* Show role or Login (Admin/User not translated) */}
+            {role === 'admin' ? <span>Admin</span> : role === 'user' ? <span>User</span> : <span>{t.login}</span>}
           </button>
           {dropdownOpen && (
-            <div className="dropdown-menu">
+            <div className="dropdown-menu" role="menu">
+              {/* If logged in as admin, show all admin pages and logout */}
               {role === 'admin' && (
-                <button onClick={() => handleLogin('user')}>User</button>
+                <>
+                  <button onClick={() => navigate('/documents')}>{t.documents}</button>
+                  <button onClick={() => navigate('/chat-sessions')}>{t.chatSessions}</button>
+                  <button onClick={() => navigate('/settings')}>{t.chatbotSettings}</button>
+                  <button onClick={() => navigate('/template-questions')}>{t.templateQuestions}</button>
+                  <button onClick={handleLogout}>{t.logout}</button>
+                </>
               )}
-             {role !== 'admin' && (
-                <button onClick={() => handleLogin('admin')}>Admin</button>
+              {/* If logged in as user, only show logout */}
+              {role === 'user' && (
+                <button onClick={handleLogout}>{t.logout}</button>
               )}
+              {/* If no role, show login options for user and admin */}
               {!role && (
                 <>
-                  <button onClick={() => handleLogin('user')}>User</button>
-                  <button onClick={() => handleLogin('admin')}>Admin</button>
+                  <button onClick={() => handleLogin('user')}>{t.loginUser}</button>
+                  <button onClick={() => handleLogin('admin')}>{t.loginAdmin}</button>
                 </>
               )}
             </div>

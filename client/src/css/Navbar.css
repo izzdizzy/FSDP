@@ -50,7 +50,7 @@
   height: 100%;
   padding: 20px;
   font-weight: bold;
-  margin-right: 50px;
+  margin-right: 100px;
 }
 
 .dropdown-menu {
@@ -58,6 +58,7 @@
   background-color: #fff;
   border: 1px solid #ccc;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  margin-right: 100 px;
   z-index: 1000;
 }
 

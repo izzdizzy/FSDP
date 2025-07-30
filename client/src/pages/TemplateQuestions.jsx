@@ -4,6 +4,52 @@ import Navbar from '../components/Navbar';
 import '../css/template-questions.css';
 
 const TemplateQuestions = () => {
+  // Translation object
+  const translations = {
+    en: {
+      title: 'Template Questions',
+      loading: 'Loading template questions...',
+      manage: 'Manage pre-defined questions that users can select when starting a new chat',
+      max: 'Maximum: 4 questions allowed',
+      current: 'Current',
+      addNew: '+ Add New Question',
+      maxReached: '(Max Reached)',
+      lastUpdated: 'Last Updated',
+      updatedBy: 'Updated By',
+      question: 'Question',
+      answerPreview: 'Answer Preview',
+      actions: 'Actions',
+      noQuestions: 'No template questions found. Add some questions to get started!',
+      save: 'Save',
+      cancel: 'Cancel',
+      edit: 'Edit',
+      delete: 'Delete',
+      confirmDelete: 'Are you sure you want to delete this template question?',
+    },
+    zh: {
+      title: '模板问题',
+      loading: '正在加载模板问题...',
+      manage: '管理用户在开始新聊天时可选择的预设问题',
+      max: '最多：允许4个问题',
+      current: '当前',
+      addNew: '+ 添加新问题',
+      maxReached: '(已达上限)',
+      lastUpdated: '最后更新',
+      updatedBy: '更新者',
+      question: '问题',
+      answerPreview: '答案预览',
+      actions: '操作',
+      noQuestions: '未找到模板问题。请添加一些问题以开始！',
+      save: '保存',
+      cancel: '取消',
+      edit: '编辑',
+      delete: '删除',
+      confirmDelete: '您确定要删除此模板问题吗？',
+    }
+  };
+  // Get language from localStorage
+  const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en');
+  const t = translations[language];
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedQuestion, setExpandedQuestion] = useState(null);
@@ -14,9 +60,15 @@ const TemplateQuestions = () => {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    document.title = 'Template Questions - Admin';
+    document.title = t.title + ' - Admin';
     loadQuestions();
-  }, []);
+    // Listen for language change
+    const handleLangChange = () => {
+      setLanguage(localStorage.getItem('language') || 'en');
+    };
+    window.addEventListener('languageChanged', handleLangChange);
+    return () => window.removeEventListener('languageChanged', handleLangChange);
+  }, [t.title]);
 
   // Load all template questions
   const loadQuestions = async () => {
@@ -38,23 +90,31 @@ const TemplateQuestions = () => {
     }
   };
 
-  // Toggle question expansion
+  // Toggle question expansion - clicking expand allows editing
   const toggleQuestion = (questionId) => {
     if (expandedQuestion === questionId) {
       setExpandedQuestion(null);
+      // Stop editing when collapsing
+      if (editingQuestion === questionId) {
+        setEditingQuestion(null);
+        setEditValues({});
+      }
     } else {
       setExpandedQuestion(questionId);
+      // Start editing when expanding
+      const question = questions.find(q => q.id === questionId);
+      if (question) {
+        setEditingQuestion(questionId);
+        setEditValues({
+          question: question.question,
+          answer: question.answer
+        });
+      }
     }
   };
 
   // Start editing a question
-  const startEditing = (question) => {
-    setEditingQuestion(question.id);
-    setEditValues({
-      question: question.question,
-      answer: question.answer
-    });
-  };
+  // (Removed unused startEditing function)
 
   // Cancel editing
   const cancelEditing = () => {
@@ -130,8 +190,15 @@ const TemplateQuestions = () => {
     }
   };
 
-  // Add new question
+  // Add new question with 4-question limit
   const addNewQuestion = async () => {
+    // Check if already at 4 questions limit
+    if (questions.length >= 4) {
+      setErrorMessage('Maximum of 4 template questions allowed. Please delete an existing question first.');
+      setTimeout(() => setErrorMessage(''), 5000);
+      return;
+    }
+
     const question = prompt('Enter the new question:');
     if (!question || question.trim().length === 0) return;
 
@@ -188,7 +255,7 @@ const TemplateQuestions = () => {
         <Navbar />
         <div className="loading-container">
           <div className="loading-spinner"></div>
-          <p>Loading template questions...</p>
+          <p>{t.loading}</p>
         </div>
       </div>
     );
@@ -208,14 +275,20 @@ const TemplateQuestions = () => {
 
       <div className="questions-content">
         <div className="header">
-          <h1>Template Questions</h1>
-          <p>Manage pre-defined questions that users can select when starting a new chat</p>
+          <h1>{t.title}</h1>
+          <p>{t.manage}</p>
+          <p className="question-limit">{t.max} | {t.current}: {questions.length}/4</p>
         </div>
 
         {/* Add new question button */}
         <div className="add-question-section">
-          <button className="add-question-btn" onClick={addNewQuestion}>
-            + Add New Question
+          <button 
+            className="add-question-btn" 
+            onClick={addNewQuestion}
+            disabled={questions.length >= 4}
+            title={questions.length >= 4 ? t.max + t.maxReached : t.addNew}
+          >
+            {t.addNew} {questions.length >= 4 && t.maxReached}
           </button>
         </div>
 
@@ -223,11 +296,11 @@ const TemplateQuestions = () => {
         <table className="questions-table">
           <thead>
             <tr>
-              <th>Last Updated</th>
-              <th>Updated By</th>
-              <th>Question</th>
-              <th>Answer Preview</th>
-              <th>Actions</th>
+              <th>{t.lastUpdated}</th>
+              <th>{t.updatedBy}</th>
+              <th>{t.question}</th>
+              <th>{t.answerPreview}</th>
+              <th>{t.actions}</th>
             </tr>
           </thead>
           <tbody>
@@ -253,14 +326,7 @@ const TemplateQuestions = () => {
                           className="expand-btn"
                           onClick={() => toggleQuestion(question.id)}
                         >
-                          {isExpanded ? '▼ Collapse' : '▶ Expand'}
-                        </button>
-                        <button 
-                          className="edit-btn"
-                          onClick={() => startEditing(question)}
-                          disabled={isEditing}
-                        >
-                          Edit
+                          {isExpanded ? '▼ Collapse' : '▶ Expand & Edit'}
                         </button>
                         <button 
                           className="delete-btn"
@@ -356,7 +422,7 @@ const TemplateQuestions = () => {
             {questions.length === 0 && (
               <tr>
                 <td colSpan={5} className="no-questions">
-                  <p>No template questions found. Add some questions to get started!</p>
+                  <p>{t.noQuestions}</p>
                 </td>
               </tr>
             )}

@@ -64,21 +64,26 @@ const readFileContent = async (filePath, originalName) => {
 };
 
 const analyzeUserMessageForFiles = (message, availableDocuments) => {
+    // Only reference files that are explicitly mentioned by the user.
+    // This prevents referencing any file that is not directly asked for.
     const requestedFiles = [];
     const messageLower = message.toLowerCase();
 
-    // Match by partial or full name (case-insensitive)
+    // Match by explicit file/document name (case-insensitive, must be exact or close match)
     for (const doc of availableDocuments) {
         const fileNameLower = doc.originalName.toLowerCase();
         const fileNameWithoutExt = path.parse(doc.originalName).name.toLowerCase();
-        if (messageLower.includes(fileNameLower) || 
-            messageLower.includes(fileNameWithoutExt) ||
-            messageLower.includes(doc.originalName.toLowerCase())) {
+        // Only add if the user message contains the full name or a clear reference
+        // (e.g., "Staff Handbook_May 2025.pdf" or "Staff Handbook")
+        if (
+            messageLower.includes(fileNameLower) ||
+            (fileNameWithoutExt.length > 4 && messageLower.includes(fileNameWithoutExt))
+        ) {
             requestedFiles.push(doc);
         }
     }
 
-    // Match by explicit file number
+    // Match by explicit file/document number (e.g., "file 2", "document 1")
     const fileNumberMatch = messageLower.match(/(?:file|document|doc)\s*(\d+)/g);
     if (fileNumberMatch && availableDocuments.length > 0) {
         fileNumberMatch.forEach(match => {
@@ -86,6 +91,7 @@ const analyzeUserMessageForFiles = (message, availableDocuments) => {
             if (numberMatch) {
                 const fileIndex = parseInt(numberMatch[1]) - 1;
                 if (fileIndex >= 0 && fileIndex < availableDocuments.length) {
+                    // Only add if not already included
                     if (!requestedFiles.find(f => f.id === availableDocuments[fileIndex].id)) {
                         requestedFiles.push(availableDocuments[fileIndex]);
                     }
@@ -94,6 +100,8 @@ const analyzeUserMessageForFiles = (message, availableDocuments) => {
         });
     }
 
+    // Edge case: If no explicit reference, do not return any file
+    // This ensures strict referencing
     return requestedFiles;
 };
 
@@ -150,12 +158,59 @@ const extractRelevantText = (content, query) => {
             return queryWords.some(word => lineLower.includes(word));
         });
         const relevantText = relevantLines.join('\n');
-        const maxLength = 2000;
+        const maxLength = 5000;
         return relevantText.length > maxLength ? relevantText.substring(0, maxLength) + '... [truncated]' : relevantText;
     } catch (error) {
         return '[Error extracting relevant text]';
     }
 };
+
+const generateChatTopic = (message) => {
+    // Simple logic to generate a topic based on the message
+    // Replace this with AI or more complex logic if needed
+    return message.split(' ').slice(0, 3).join(' ').trim() || 'General';
+};
+
+/**
+ * Extracts a specific section from a TXT document based on section reference.
+ * For other file types, returns an error (extend as needed).
+ * @param {string} filePath - Path to the document file.
+ * @param {string} sectionRef - Section reference, e.g., "1.1"
+ * @returns {Promise<{text: string, error?: string}>}
+ */
+async function extractSectionFromDocument(filePath, sectionRef) {
+  const ext = path.extname(filePath).toLowerCase();
+  try {
+    if (ext === '.txt') {
+      // For TXT, use regex to find section header and extract until next header
+      const content = await fs.promises.readFile(filePath, 'utf8');
+      // Match section header (e.g., "1.1 Title") and extract until next section header
+      const sectionRegex = new RegExp(`^${sectionRef.replace('.', '\\.')}(?:\\s+|\\.)(.+)$`, 'm');
+      const match = content.match(sectionRegex);
+      if (!match) return { error: `Section ${sectionRef} not found.` };
+      // Optionally, extract until next section header (advanced: implement multi-line extraction)
+      return { text: match[1].trim() };
+    }
+    // Extend for PDF/DOCX as needed
+    return { error: 'Unsupported file type for section extraction.' };
+  } catch (err) {
+    return { error: `Error reading file: ${err.message}` };
+  }
+}
+
+/**
+ * Parses user message for section requests, e.g., "section 1.1 of Staff Handbook"
+ * Returns { document, section } if found, else null.
+ */
+function parseSectionRequest(message, documents) {
+  const sectionMatch = message.match(/section\s+(\d+(?:\.\d+)*)\s+of\s+([\w\s\-\.]+?)(?:\.|$)/i);
+  if (!sectionMatch) return null;
+  const section = sectionMatch[1];
+  const docName = sectionMatch[2].trim();
+  const document = documents.find(doc => doc.originalName.toLowerCase().includes(docName.toLowerCase()));
+  if (!document) return null;
+  return { document, section };
+}
 
 module.exports = {
     readFileContent,
@@ -163,6 +218,9 @@ module.exports = {
     isFileRelatedQuery,
     callBedrock,
     extractRelevantText,
+    generateChatTopic,
     delay,
-    getDB
+    getDB,
+    extractSectionFromDocument,
+    parseSectionRequest
 };

@@ -5,7 +5,81 @@ import '../css/App.css';
 import Navbar from '../components/Navbar';
 import http from '../http'; 
 
-const DocumentsPage = ( {pagetitle} ) => {
+const DocumentsPage = () => {
+  // Translation object
+  const translations = {
+    en: {
+      documents: 'Documents',
+      upload: 'Upload',
+      uploading: 'Uploading...',
+      id: 'ID',
+      fileName: 'File Name',
+      name: 'Name',
+      date: 'Date',
+      actions: 'Actions',
+      replaceFile: 'Replace File',
+      save: 'Save',
+      cancel: 'Cancel',
+      edit: 'Edit',
+      delete: 'Delete',
+      noDocuments: 'No documents found',
+      noSearchResults: 'No documents match your search criteria',
+      confirmDelete: 'Are you sure you want to delete this document?',
+      yes: 'Yes',
+      chatbotIconAlt: 'Chatbot Icon',
+      fileNotCompatible: 'File is not compatible',
+      fileUploaded: 'File uploaded successfully',
+      fileDeleted: 'File deleted successfully',
+      fileRenamed: 'File renamed successfully',
+      fileReplaced: 'File replaced successfully',
+      failedToLoad: 'Failed to load documents',
+      errorOccurred: 'Unknown error occurred',
+      searchPlaceholder: 'Search by file name or name...',
+      sortBy: 'Sort by:',
+      sortName: 'Name',
+      sortFileName: 'File Name',
+      sortDate: 'Date',
+      ascending: 'Ascending',
+      descending: 'Descending',
+    },
+    zh: {
+      documents: '文件',
+      upload: '上传',
+      uploading: '正在上传...',
+      id: '编号',
+      fileName: '文件名',
+      name: '名称',
+      date: '日期',
+      actions: '操作',
+      replaceFile: '替换文件',
+      save: '保存',
+      cancel: '取消',
+      edit: '编辑',
+      delete: '删除',
+      noDocuments: '未找到文件',
+      noSearchResults: '没有符合搜索条件的文件',
+      confirmDelete: '您确定要删除此文件吗？',
+      yes: '是',
+      chatbotIconAlt: '聊天机器人图标',
+      fileNotCompatible: '文件类型不兼容',
+      fileUploaded: '文件上传成功',
+      fileDeleted: '文件删除成功',
+      fileRenamed: '文件重命名成功',
+      fileReplaced: '文件替换成功',
+      failedToLoad: '加载文件失败',
+      errorOccurred: '发生未知错误',
+      searchPlaceholder: '按文件名或名称搜索...',
+      sortBy: '排序方式:',
+      sortName: '名称',
+      sortFileName: '文件名',
+      sortDate: '日期',
+      ascending: '升序',
+      descending: '降序',
+    }
+  };
+  // Get language from localStorage
+  const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'en');
+  const t = translations[language];
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -14,18 +88,67 @@ const DocumentsPage = ( {pagetitle} ) => {
   const [editValues, setEditValues] = useState({});
   const [deletingId, setDeletingId] = useState(null);
   const [showChat, setShowChat] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  
+  // Sorting and filtering state
+  const [sortField, setSortField] = useState('');
+  const [sortDirection, setSortDirection] = useState('asc');
+  const [searchTerm, setSearchTerm] = useState('');
 
-  const fetchDocs = async () => {
-    try {
-      const res = await http.get('/documents');
-      console.log('Fetched documents:', res.data);
-      setDocs(res.data);
-    } catch (err) {
-      console.error('Error fetching documents:', err.message);
-      setErrorMessage('Failed to load documents');
-    } finally {
-      setLoading(false);
+  // Sorting and filtering functions
+  const handleSort = (field) => {
+    const newDirection = sortField === field && sortDirection === 'asc' ? 'desc' : 'asc';
+    setSortField(field);
+    setSortDirection(newDirection);
+  };
+
+  const getDisplayDocs = () => {
+    let result = [...docs];
+
+    // Apply search filter
+    if (searchTerm) {
+      result = result.filter(doc =>
+        doc.originalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        doc.filename.toLowerCase().includes(searchTerm.toLowerCase())
+      );
     }
+
+    // Apply sorting
+    if (sortField) {
+      result.sort((a, b) => {
+        let aValue, bValue;
+        
+        switch (sortField) {
+          case 'name':
+            aValue = a.originalName.toLowerCase();
+            bValue = b.originalName.toLowerCase();
+            break;
+          case 'filename':
+            aValue = a.filename.toLowerCase();
+            bValue = b.filename.toLowerCase();
+            break;
+          case 'date':
+            aValue = new Date(a.uploadDate);
+            bValue = new Date(b.uploadDate);
+            break;
+          default:
+            return 0;
+        }
+
+        if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+        if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return result;
+  };
+
+  const getSortIcon = (field) => {
+    if (sortField !== field) return <img src="/filter.png" alt="Sort" style={{ width: 16, height: 16, verticalAlign: 'middle' }} />;
+    return sortDirection === 'asc'
+      ? <span style={{ fontSize: 16, verticalAlign: 'middle' }}>↑</span>
+      : <span style={{ fontSize: 16, verticalAlign: 'middle' }}>↓</span>;
   };
 
   const showSuccess = (message) => {
@@ -44,7 +167,7 @@ const DocumentsPage = ( {pagetitle} ) => {
 
     const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
     if (!allowedTypes.includes(file.type)) {
-      showError('File is not compatible');
+      showError(t.fileNotCompatible);
       return;
     }
 
@@ -61,11 +184,17 @@ const DocumentsPage = ( {pagetitle} ) => {
         },
       });
       console.log('Document uploaded successfully:', res.data);
-      await fetchDocs();
-      showSuccess('File uploaded successfully');
+      const newRes = await http.get('/documents');
+      setDocs(newRes.data);
+      showSuccess(t.fileUploaded);
     } catch (err) {
-      console.error('Error uploading document:', err.message);
-      showError(err.message || 'Unknown error occurred');
+      // Check for duplicate error (customize this check based on backend response)
+      if (err.response && (err.response.status === 409 || (err.response.data && err.response.data.error && err.response.data.error.toLowerCase().includes('duplicate')))) {
+        showError('Duplicate file.');
+      } else {
+        console.error('Error uploading document:', err.message);
+        showError(err.message || t.errorOccurred);
+      }
     } finally {
       setLoading(false);
     }
@@ -82,8 +211,9 @@ const DocumentsPage = ( {pagetitle} ) => {
     try {
       const res = await http.delete(`/documents/${id}`);
       console.log('Document deleted successfully:', res.data);
-      await fetchDocs();
-      showSuccess('File deleted successfully');
+      const newRes = await http.get('/documents');
+      setDocs(newRes.data);
+      showSuccess(t.fileDeleted);
     } catch (err) {
       console.error('Error deleting document:', err.message);
       showError(err.message);
@@ -107,7 +237,7 @@ const DocumentsPage = ( {pagetitle} ) => {
       });
       console.log('Document updated successfully:', res.data);
       if (editValues[doc.id] !== doc.originalName) {
-        showSuccess('File renamed successfully');
+      showSuccess(t.fileRenamed);
       }
 
       setEditingId(null);
@@ -117,7 +247,8 @@ const DocumentsPage = ( {pagetitle} ) => {
         return newState;
       });
 
-      await fetchDocs();
+      const newRes = await http.get('/documents');
+      setDocs(newRes.data);
     } catch (err) {
       console.error('Error saving edit:', err.message);
       showError(err.message);
@@ -137,7 +268,7 @@ const DocumentsPage = ( {pagetitle} ) => {
 
     const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
     if (!allowedTypes.includes(file.type)) {
-      showError('File is not compatible');
+      showError(t.fileNotCompatible);
       return;
     }
 
@@ -154,8 +285,9 @@ const DocumentsPage = ( {pagetitle} ) => {
         },
       });
       console.log('File replaced successfully:', res.data);
-      await fetchDocs();
-      showSuccess('File replaced successfully');
+      const newRes = await http.get('/documents');
+      setDocs(newRes.data);
+      showSuccess(t.fileReplaced);
     } catch (err) {
       console.error('Error replacing document:', err.message);
       showError(err.message);
@@ -165,12 +297,31 @@ const DocumentsPage = ( {pagetitle} ) => {
   };
 
   useEffect(() => {
-    fetchDocs();
-  }, []);
+    const loadDocs = async () => {
+      try {
+        const res = await http.get('/documents');
+        console.log('Fetched documents:', res.data);
+        setDocs(res.data);
+      } catch (err) {
+        console.error('Error fetching documents:', err.message);
+        setErrorMessage(t.failedToLoad);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadDocs();
+    // Listen for language change
+    const handleLangChange = () => {
+      setLanguage(localStorage.getItem('language') || 'en');
+    };
+    window.addEventListener('languageChanged', handleLangChange);
+    return () => window.removeEventListener('languageChanged', handleLangChange);
+  }, [t.failedToLoad]);
 
   useEffect(() => {
-    document.title = 'Documents'
-  }, [pagetitle]);
+    document.title = t.documents;
+  }, [t.documents]);
 
   return (
     <>
@@ -188,33 +339,61 @@ const DocumentsPage = ( {pagetitle} ) => {
         <br />
 
         <div className="header">
-          <h1>Documents</h1>
+          <h1>{t.documents}</h1>
         </div>
+        
 
         <div className="file-upload">
           <label className="upload-label">
             <input type="file" onChange={uploadDoc} disabled={loading} hidden />
             <div className="upload-button">
               <span className="upload-icon">+</span>
-              <span className="upload-text">Upload</span>
+              <span className="upload-text">{t.upload}</span>
             </div>
           </label>
-          {loading && <p className="uploading">Uploading...</p>}
+          
+          <button
+            className="filter-toggle-btn"
+            onClick={() => setShowFilters((prev) => !prev)}
+            style={{ marginLeft: 25, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}
+          >
+            <img src="/filter.png" alt="Filter" style={{ width: 20, height: 20 }} />
+            {showFilters ? (t.cancel + ' ' + t.sortBy) : t.sortBy}
+          </button>
+          {showFilters && (
+            <div className="table-controls">
+              <div className="search-container">
+                <input
+                  type="text"
+                  placeholder={t.searchPlaceholder}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="search-input"
+                />
+              </div>
+              <div className="sort-controls">
+                <label>{t.sortBy}</label>
+                <button type="button" className="sort-btn" onClick={() => handleSort('filename')}>{t.sortFileName} {getSortIcon('filename')}</button>
+                <button type="button" className="sort-btn" onClick={() => handleSort('name')}>{t.sortName} {getSortIcon('name')}</button>
+                <button type="button" className="sort-btn" onClick={() => handleSort('date')}>{t.sortDate} {getSortIcon('date')}</button>
+              </div>
+            </div>
+          )}
         </div>
 
         <table>
           <thead>
             <tr>
-              <th>ID</th>
-              <th>File Name</th>
-              <th>Name</th>
-              <th>Date</th>
-              <th>Actions</th>
+              <th>{t.id}</th>
+              <th>{t.fileName}</th>
+              <th>{t.name}</th>
+              <th>{t.date}</th>
+              <th>{t.actions}</th>
             </tr>
           </thead>
           <tbody>
-            {docs.length > 0 ? (
-              docs.map((doc, idx) => (
+            {getDisplayDocs().length > 0 ? (
+              getDisplayDocs().map((doc, idx) => (
                 <tr key={doc.id}>
                   <td>{idx + 1}</td>
                   <td>{doc.filename}</td>
@@ -240,7 +419,7 @@ const DocumentsPage = ( {pagetitle} ) => {
                   <td>{new Date(doc.uploadDate).toLocaleString()}</td>
                   <td className="actions">
                     <label className="button">
-                      Replace File
+                      {t.replaceFile}
                       <input
                         type="file"
                         hidden
@@ -249,7 +428,7 @@ const DocumentsPage = ( {pagetitle} ) => {
                     </label>
                     {editingId === doc.id ? (
                       <>
-                        <button className="button" onClick={() => saveEdit(doc)}>Save</button>
+                        <button className="button" onClick={() => saveEdit(doc)}>{t.save}</button>
                         <button
                           className="button-delete"
                           onClick={() => {
@@ -261,13 +440,13 @@ const DocumentsPage = ( {pagetitle} ) => {
                             });
                           }}
                         >
-                          Cancel
+                          {t.cancel}
                         </button>
                       </>
                     ) : (
                       <>
-                        <button className="button" onClick={() => startEditing(doc)}>Edit</button>
-                        <button className="button-delete" onClick={() => handleDelete(doc.id)}>Delete</button>
+                        <button className="button" onClick={() => startEditing(doc)}>{t.edit}</button>
+                        <button className="button-delete" onClick={() => handleDelete(doc.id)}>{t.delete}</button>
                       </>
                     )}
                   </td>
@@ -275,7 +454,9 @@ const DocumentsPage = ( {pagetitle} ) => {
               ))
             ) : (
               <tr>
-                <td colSpan="4">No documents found</td>
+                <td colSpan="5">
+                  {docs.length === 0 ? t.noDocuments : t.noSearchResults}
+                </td>
               </tr>
             )}
           </tbody>
@@ -285,16 +466,16 @@ const DocumentsPage = ( {pagetitle} ) => {
           <>
             <div className="modal-backdrop"></div>
             <div className="modal">
-              <p>Are you sure you want to delete this document?</p>
-              <button id='yes-delete' onClick={confirmDelete} style={{ marginRight: '10px' }}>Yes</button>
-              <button onClick={() => setDeletingId(null)}>Cancel</button>
+              <p>{t.confirmDelete}</p>
+              <button id='yes-delete' onClick={confirmDelete} style={{ marginRight: '10px' }}>{t.yes}</button>
+              <button onClick={() => setDeletingId(null)}>{t.cancel}</button>
             </div>
           </>
         )}
 
         {!showChat && (
           <button className="chat-icon-button" onClick={() => setShowChat(true)}>
-            <img src="/Chatbot-icon.png" alt="Chatbot Icon" className="chat-icon" />
+            <img src="/Chatbot-icon.png" alt={t.chatbotIconAlt} className="chat-icon" />
           </button>
         )}
 
